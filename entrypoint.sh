@@ -63,21 +63,6 @@ if [ -n "${RSYSLOG_SERVER:-}" ] && ! grep -q "$RSYSLOG_SERVER" /etc/rsyslog.conf
 fi
 
 
-# configuration update
-export ETH0_IP="$(/sbin/ifconfig eth0 | grep 'inet addr' | awk '{ print $2 }' | cut -f2 -d ':')"
-SUB_CACHE=/data/sub_src
-if [ -e "$SUB_CACHE" ]; then
-  export SUB_SRC="$(cat "$SUB_CACHE")"
-else
-  export SUB_SRC="$(python /app/resin --get-devices | grep -v "$ETH0_IP" | paste -d, -s)"
-  echo "$SUB_SRC" > "$SUB_CACHE"
-fi
-# application configuration (no tee for secrets)
-cat /app/config/app.conf | python /app/config_interpol > "/app/${APP_NAME}.conf"
-unset ETH0_IP
-unset SUB_SRC
-
-
 # remove unnecessary kernel drivers
 rmmod w1_gpio||true
 
@@ -101,6 +86,22 @@ mv /etc/vsftpd.conf /etc/vsftpd.conf.backup
 mv /etc/vsftpd.conf.new /etc/vsftpd.conf
 # secure_chroot_dir
 mkdir -p /var/run/vsftpd/empty
+
+
+# configuration update
+export ETH0_IP="$(/sbin/ifconfig eth0 | grep 'inet addr' | awk '{ print $2 }' | cut -f2 -d ':')"
+SUB_CACHE=/data/sub_src
+if [ -e "$SUB_CACHE" ]; then
+  export SUB_SRC="$(cat "$SUB_CACHE")"
+else
+  export SUB_SRC="$(python /app/resin --get-devices | grep -v "$ETH0_IP" | paste -d, -s)"
+  echo "$SUB_SRC" > "$SUB_CACHE"
+fi
+# application configuration (no tee for secrets)
+cat /app/config/app.conf | python /app/config_interpol > "/app/${APP_NAME}.conf"
+unset ETH0_IP
+unset SUB_SRC
+
 
 cat /app/config/cleanup_snapshots | sed 's/__STORAGE__/'"${STORAGE_UPLOADS//\//\/}\/"'/g' > /etc/cron.d/cleanup_snapshots
 
