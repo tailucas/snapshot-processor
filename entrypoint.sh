@@ -114,6 +114,7 @@ echo "$GOOGLE_CLIENT_SECRETS" > /app/client_secrets.json
 if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
   echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
 fi
+echo "$API_IBM_TTS" > /app/ibm_tts_creds.json
 
 # so app user can make the noise
 adduser "${APP_USER}" audio
