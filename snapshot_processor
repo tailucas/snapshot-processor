@@ -1018,8 +1018,9 @@ class SnapshotProcessor(Thread):
 def signal_handler(signum, frame):
     log.warn('Signal {} received.'.format(signum))
     log.setLevel(logging.DEBUG)
-    log.debug('Draining deferred notifications now.')
-    notifier.drain_deferred_notifications()
+    #TODO remove/fix
+    #log.debug('Draining deferred notifications now.')
+    #notifier.drain_deferred_notifications()
 
 
 @rest_api.route('/logging')
