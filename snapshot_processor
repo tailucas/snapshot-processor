@@ -32,6 +32,7 @@ from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError
 from sets import Set
 from Queue import Queue, Empty
+from requests.exceptions import HTTPError
 from threading import Thread, Timer
 from time import sleep
 from umsgpack import UnpackException
@@ -218,32 +219,38 @@ class Notifier(Thread):
         log.debug('{} exists? {}'.format(tts_path, os.path.isfile(tts_path)))
         if not os.path.isfile(tts_path):
             log.debug("Generating '{}' using {}".format(message, TTS_URL))
-            r = requests.get(
-                url=TTS_URL,
-                # http://stackoverflow.com/questions/9893175/google-text-to-speech-api
-                # curl 'http://translate.google.com/translate_tts?ie=UTF-8&q=Hello&tl=en&client=t'
-                # -H 'Referer: http://translate.google.com/' -H 'User-Agent: stagefright/1.2 (Linux;Android 5.0)' > google_tts.mp3
-                params={'ie': 'UTF-8',
-                        'tl': 'en',
-                        'client': 't',
-                        'q': message},
-                headers={'User-Agent': 'stagefright/1.2 (Linux;Android 5.0)',
-                         'Referer': 'http://translate.google.com/'},
-                allow_redirects=False)
-            log.debug('HTTP {} from {}'.format(r.status_code, r.url))
-            r.raise_for_status()
-            log.debug('HTTP response: {}'.format(r.headers))
-            # HTTP30x
-            if r.status_code >= 300 and r.status_code < 400:
-                # try to give some helpful information
-                if 'location' in r.headers:
-                    log.warning('You must visit {} to create {}'.format(r.headers['location'], tts_path))
-            if r.status_code == requests.codes.ok:
-                # only write a file upon success
-                with open(tts_path, 'wb') as fd:
-                    for chunk in r.iter_content(1024*64):
-                        fd.write(chunk)
-                log.debug('Written {} bytes to {}'.format(os.path.getsize(tts_path), tts_path))
+            try:
+                r = requests.get(
+                    url=TTS_URL,
+                    # http://stackoverflow.com/questions/9893175/google-text-to-speech-api
+                    # curl 'http://translate.google.com/translate_tts?ie=UTF-8&q=Hello&tl=en&client=t'
+                    # -H 'Referer: http://translate.google.com/' -H 'User-Agent: stagefright/1.2 (Linux;Android 5.0)' > google_tts.mp3
+                    params={'ie': 'UTF-8',
+                            'tl': 'en',
+                            'client': 't',
+                            'q': message},
+                    headers={'User-Agent': 'stagefright/1.2 (Linux;Android 5.0)',
+                             'Referer': 'http://translate.google.com/'},
+                    allow_redirects=False)
+                log.debug('HTTP {} from {}'.format(r.status_code, r.url))
+                r.raise_for_status()
+                log.debug('HTTP response: {}'.format(r.headers))
+                # HTTP30x
+                if r.status_code >= 300 and r.status_code < 400:
+                    # try to give some helpful information
+                    if 'location' in r.headers:
+                        log.warning('You must visit {} to create {}'.format(r.headers['location'], tts_path))
+                if r.status_code == requests.codes.ok:
+                    # only write a file upon success
+                    with open(tts_path, 'wb') as fd:
+                        for chunk in r.iter_content(1024*64):
+                            fd.write(chunk)
+                    log.debug('Written {} bytes to {}'.format(os.path.getsize(tts_path), tts_path))
+            except HTTPError as e:
+                log.exception("Unable to transmute '{}' into [{}]. You must do this yourself at {}.".format(message,
+                                                                                                            tts_path,
+                                                                                                            TTS_URL))
+                raise e
         if os.path.isfile(tts_path):
             # now play
             log.debug("Saying '{}'...".format(message))
