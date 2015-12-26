@@ -147,7 +147,8 @@ class Notifier(Thread):
         self.tts_default_sound_file = config.get('app', 'tts_default_sound')
         with open(config.get('ibm', 'tts_creds')) as config_file:
             tts_api_cfg = json.load(config_file)
-        self.tts_file_format = 'ogg'
+        self.tts_file_format = 'flac'
+        self.tts_file_encoding = 'audio/{}'.format(self.tts_file_format)
         self.tts_url = '/'.join([tts_api_cfg['credentials']['url'], 'v1/synthesize'])
         self.tts_auth = (tts_api_cfg['credentials']['username'],
                          tts_api_cfg['credentials']['password'])
@@ -227,6 +228,7 @@ class Notifier(Thread):
                 url=self.tts_url,
                 auth=self.tts_auth,
                 params={'text': message},
+                headers={'accept': self.tts_file_encoding},
                 allow_redirects=False)
             log.debug('HTTP {} from {}'.format(r.status_code, r.url))
             r.raise_for_status()
