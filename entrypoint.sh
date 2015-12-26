@@ -14,6 +14,14 @@ elif [ -n "$ROOT_PASSWORD" ]; then
   sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
 fi
 
+# client details
+echo "$GOOGLE_CLIENT_SECRETS" > /app/client_secrets.json
+# we may already have a valid auth token
+if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
+  echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
+fi
+echo "$API_IBM_TTS" > /app/ibm_tts_creds.json
+
 
 set -x
 
@@ -107,14 +115,6 @@ cat /app/config/cleanup_snapshots | sed 's/__STORAGE__/'"${STORAGE_UPLOADS//\//\
 
 # tts samples
 cp -rv /app/tts_samples/ /data/
-
-# client details
-echo "$GOOGLE_CLIENT_SECRETS" > /app/client_secrets.json
-# we may already have a valid auth token
-if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
-  echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
-fi
-echo "$API_IBM_TTS" > /app/ibm_tts_creds.json
 
 # so app user can make the noise
 adduser "${APP_USER}" audio
