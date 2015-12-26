@@ -148,7 +148,7 @@ class Notifier(Thread):
         with open(config.get('ibm', 'tts_creds')) as config_file:
             tts_api_cfg = json.load(config_file)
         self.tts_file_format = 'ogg'
-        self.tts_url = '/'.join([tts_api_cfg['credentials']['url'], 'v1/synthesize']),
+        self.tts_url = '/'.join([tts_api_cfg['credentials']['url'], 'v1/synthesize'])
         self.tts_auth = (tts_api_cfg['credentials']['username'],
                          tts_api_cfg['credentials']['password'])
 
