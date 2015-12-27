@@ -149,6 +149,7 @@ class Notifier(Thread):
             tts_api_cfg = json.load(config_file)
         self.tts_file_format = 'flac'
         self.tts_file_encoding = 'audio/{}'.format(self.tts_file_format)
+        self.tts_voice = config.get('ibm', 'tts_voice')
         self.tts_url = '/'.join([tts_api_cfg['credentials']['url'], 'v1/synthesize'])
         self.tts_auth = (tts_api_cfg['credentials']['username'],
                          tts_api_cfg['credentials']['password'])
@@ -213,7 +214,7 @@ class Notifier(Thread):
     def say(self, message):
         msg_checksum = Notifier.checksum(message)
         log.debug("Checksum for '{}' is [{}]".format(message, msg_checksum))
-        tts_file = '{}.{}'.format(msg_checksum, self.tts_file_format)
+        tts_file = '{}.{}.{}'.format(msg_checksum, self.tts_voice, self.tts_file_format)
         tts_path = os.path.join(TTS_DIR, tts_file)
         if os.path.isfile(tts_path) and os.path.getsize(tts_path) == 0:
             log.debug('Removing empty file {}'.format(tts_path))
@@ -227,7 +228,8 @@ class Notifier(Thread):
             r = requests.get(
                 url=self.tts_url,
                 auth=self.tts_auth,
-                params={'text': message},
+                params={'text': message,
+                        'voice': self.tts_voice},
                 headers={'accept': self.tts_file_encoding},
                 allow_redirects=False)
             log.debug('HTTP {} from {}'.format(r.status_code, r.url))
