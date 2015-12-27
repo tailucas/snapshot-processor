@@ -1064,6 +1064,10 @@ def index():
     return render_template('index.html', relays=relays, notifications=notifications)
 
 
+def run_flask():
+    rest_api.run(host=config.get('app', 'eth0_ip'), port=5000)
+
+
 if __name__ == "__main__":
     # set up logging
     log.setLevel(logging.INFO)
@@ -1138,10 +1142,11 @@ if __name__ == "__main__":
     google_drive.start()
     threads_tracked.add(google_drive.getName())
     # start the REST interface
-    #TODO: listen on eth0
-    rest_api.run(host='0.0.0.0', port=5000)
+    f = threading.Thread(name='flask', target=run_flask)
+    f.setDaemon(True)
+    f.start()
+    threads_tracked.add(f.getName())
     try:
-        time.sleep(1)
         notifier.play_file(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
         while True:
             threads_alive = Set()
