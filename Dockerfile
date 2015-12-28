@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dbus \
     g++ \
     gcc \
-    iptables \
     less \
     libffi-dev \
     libssl-dev \
@@ -41,18 +40,8 @@ RUN pip install -r /tmp/pip_freeze
 # show outdated packages since the freeze
 RUN pip list --outdated
 
-# FTP
-EXPOSE 21
-
-# SSH
-EXPOSE 22
-
-# HTTP
-EXPOSE 5000
-
-# zmq
-EXPOSE 5556
-EXPOSE 5558
+# ftp, ssh, http, zmq
+EXPOSE 21 22 5000 5556 5558
 
 # sshd configuration
 RUN mkdir /var/run/sshd
