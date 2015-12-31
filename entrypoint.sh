@@ -120,7 +120,7 @@ cp -rv /app/tts_samples/ /data/
 adduser "${APP_USER}" audio
 
 # apcupsd
-sed -e '/ISCONFIGURED/ s^#*/#/' -i /etc/default/apcupsd
+sed -e '/ISCONFIGURED/ s/^#*/#/' -i /etc/default/apcupsd
 echo "ISCONFIGURED=yes" >> /etc/default/apcupsd
 sed -e '/DEVICE/ s/^#*/#/' -i /etc/apcupsd/apcupsd.conf
 echo "DEVICE ${UPS_USB}" >> /etc/apcupsd/apcupsd.conf
