@@ -119,6 +119,13 @@ cp -rv /app/tts_samples/ /data/
 # so app user can make the noise
 adduser "${APP_USER}" audio
 
+# apcupsd
+sed -e '/ISCONFIGURED/ s^#*/#/' -i /etc/default/apcupsd
+echo "ISCONFIGURED=yes" >> /etc/default/apcupsd
+sed -e '/DEVICE/ s/^#*/#/' -i /etc/apcupsd/apcupsd.conf
+echo "DEVICE ${UPS_USB}" >> /etc/apcupsd/apcupsd.conf
+service apcupsd start
+
 # I'm the supervisor
 cat /app/config/supervisord.conf | python /app/config_interpol | tee /etc/supervisor/conf.d/supervisord.conf
 /usr/bin/supervisord
