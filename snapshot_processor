@@ -815,7 +815,9 @@ class ApcEventTailer(LogTailer):
         log.info('{} @ {}: {}'.format(self.log_label, timestamp, log_entry))
         #FIXME
         payload = dict()
-        payload['timestamp'] = timestamp
+        parsed_timestamp = dateutil.parser.parse(timestamp)
+        payload['timestamp'] = datetime.utcfromtimestamp(parsed_timestamp).replace(tzinfo=pytz.utc).strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+        log.debug('{} updated to {}'.format(timestamp, parsed_timestamp))
         payload['data'] = {'samples': {log_entry: 1}}
         return SampledSnapshot(payload, 60)
 
