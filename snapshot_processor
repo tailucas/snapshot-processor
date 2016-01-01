@@ -1107,8 +1107,8 @@ def run_flask():
 
 
 if __name__ == "__main__":
-    # set up logging
-    log.setLevel(logging.INFO)
+    # DEBUG logging until startup complete
+    log.setLevel(logging.DEBUG)
     syslog_handler = logging.handlers.SysLogHandler(address='/dev/log')
     formatter = logging.Formatter('%(name)s [%(levelname)s] %(message)s')
     syslog_handler.setFormatter(formatter)
@@ -1159,7 +1159,7 @@ if __name__ == "__main__":
     # monitor these directories
     for source, label in image_labels.iteritems():
         upload_event_handler.add_image_dir(source_label=label, image_dir=image_snapshot_dirs[source])
-    log.info('Monitoring directories in {} for changes: {}'.format(
+    log.debug('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # log tailer
     for (log_label, log_path) in config.items('logged_events'):
@@ -1187,7 +1187,10 @@ if __name__ == "__main__":
     f.start()
     threads_tracked.add(f.getName())
     try:
+        # startup completed
         notifier.play_file(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
+        # back to INFO logging
+        log.setLevel(logging.INFO)
         while True:
             threads_alive = Set()
             for thread_info in threading.enumerate():
