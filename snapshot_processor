@@ -759,7 +759,7 @@ class UploadEventHandler(FileSystemEventHandler):
 class LogTailEventHandler(Thread):
 
     def __init__(self, log_label, log_path):
-        super(Thread, self).__init__()
+        super(LogTailEventHandler, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
 
