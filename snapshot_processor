@@ -31,6 +31,7 @@ from pprint import pprint
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError
+from pygtail import Pygtail
 from sets import Set
 from Queue import Queue, Empty
 from threading import Thread, Timer
@@ -691,11 +692,13 @@ class GoogleDriveManager(Thread, CloudStorage):
 
 class UploadEventHandler(FileSystemEventHandler):
 
-    def __init__(self, cloud_storage=None):
+    def __init__(self, cloud_storage, fs_observer):
         super(UploadEventHandler, self).__init__()
         self.last_modified = None
         self._cloud_storage = cloud_storage
         self.image_dirs = dict()
+
+        fs_observer.schedule(self, config.get('snapshots', 'root_dir'), recursive=True)
 
         self.processor = zmq_context.socket(zmq.PUSH)
         self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
@@ -753,6 +756,37 @@ class UploadEventHandler(FileSystemEventHandler):
                     log.exception('Cannot process {}'.format(snapshot_path))
 
 
+class LogTailEventHandler(Thread):
+
+    def __init__(self, log_label, log_path):
+        super(Thread, self).__init__()
+        self.name = self.__class__.__name__
+        self.daemon = True
+
+        self.log_label = log_label
+        self.log_path = log_path
+
+        self.log_dir = os.path.dirname(log_path)
+        self.log_file = os.path.basename(log_path)
+
+        if 'syslog' in self.log_file:
+            raise RuntimeError('Tailing syslog will result in log feedback.')
+
+        self.processor = zmq_context.socket(zmq.PUSH)
+        self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
+
+    def run(self):
+        log.info('Tailing log {} as {}'.format(self.log_path, self.log_label))
+        self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
+        while True:
+            try:
+                for line in Pygtail(self.log_path):
+                    # TODO: convert to source event
+                    log.info('{}: {}'.format(self.log_label, line))
+            except Exception:
+                log.exception(self.log_path)
+
+
 class SampledSnapshotEventHandler(Thread):
 
     def __init__(self, publisher_endpoint):
@@ -801,7 +835,7 @@ class SMSProvider(object):
 
 class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
 
-    def __init__(self):
+    def __init__(self, fs_observer):
         super(GammuSMSProvider, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
@@ -824,6 +858,10 @@ class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
 
         self.inbox_path = gammu_cfg.get('smsd', 'inboxpath')
         self.error_path = gammu_cfg.get('smsd', 'errorsmspath')
+
+        # register the spool directories
+        for dir in self.spool_directories:
+            fs_observer.schedule(self, dir)
 
     @property
     def spool_directories(self):
@@ -1088,12 +1126,20 @@ if __name__ == "__main__":
     # remap the labels to the directories
     if len(image_labels) != len(image_snapshot_dirs):
         raise RuntimeError('Invalid configuration. Sources and associated labels must match.')
+    # file system listener
+    observer = Observer()
+    observer.name = observer.__class__.__name__
+    # threads that we want to ensure are alive
+    threads_tracked = Set()
     # top-level types
     filetype = FileType()
     # sms
     sms_method = config.get('sms', 'method')
     if sms_method == 'gammu':
-        sms_provider = GammuSMSProvider()
+        sms_provider = GammuSMSProvider(fs_observer=observer)
+        # Since GammuSMSProvider is a Thread
+        sms_provider.start()
+        threads_tracked.add(sms_provider.getName())
     elif sms_method == 'clickatell':
         sms_provider = ClickatellSMSProvider()
     else:
@@ -1109,23 +1155,17 @@ if __name__ == "__main__":
         gauth_creds_file=config.get('gdrive', 'creds_file'),
         gdrive_folder=config.get('gdrive', 'folder'))
     cloud_storage = google_drive
-    upload_event_handler = UploadEventHandler(cloud_storage=google_drive)
+    upload_event_handler = UploadEventHandler(cloud_storage=google_drive, fs_observer=observer)
     # monitor these directories
     for source, label in image_labels.iteritems():
         upload_event_handler.add_image_dir(source_label=label, image_dir=image_snapshot_dirs[source])
-    log.debug('Monitoring directories in {} for changes: {}'.format(
+    log.info('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
-    threads_tracked = Set()
-    # file system listener
-    observer = Observer()
-    observer.name = observer.__class__.__name__
-    observer.schedule(upload_event_handler, config.get('snapshots', 'root_dir'), recursive=True)
-    if isinstance(sms_provider, GammuSMSProvider):
-        for dir in sms_provider.spool_directories:
-            observer.schedule(sms_provider, dir)
-        # Since GammuSMSProvider is a Thread
-        sms_provider.start()
-        threads_tracked.add(sms_provider.getName())
+    # log tailer
+    for (log, path) in config.items('logged_events'):
+        log_tail_thread = LogTailEventHandler(log_label=log, log_path=path)
+        log_tail_thread.start()
+        threads_tracked.add(log_tail_thread.getName())
     # start threads
     notifier.start()
     threads_tracked.add(notifier.getName())
