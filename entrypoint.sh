@@ -125,6 +125,9 @@ echo "ISCONFIGURED=yes" >> /etc/default/apcupsd
 sed -e '/DEVICE/ s/^#*/#/' -i /etc/apcupsd/apcupsd.conf
 echo "DEVICE ${UPS_USB}" >> /etc/apcupsd/apcupsd.conf
 service apcupsd start
+# Pygtail log tailer
+touch /var/log/apcupsd.events.offset
+chown "${APP_USER}:${APP_GROUP}" /var/log/apcupsd.events.offset
 
 # I'm the supervisor
 cat /app/config/supervisord.conf | python /app/config_interpol | tee /etc/supervisor/conf.d/supervisord.conf
