@@ -128,6 +128,12 @@ class SMSNotification(Notification):
         self.flash = flash
 
 
+class AudioNotification(Notification):
+
+    def __init__(self, message):
+        super(AudioNotification, self).__init__(message=message)
+
+
 class Notifier(Thread):
 
     def __init__(self, sms_provider):
@@ -170,7 +176,7 @@ class Notifier(Thread):
                 not_before))
 
     def run(self):
-        # black-holding STDOUT causes properties to not work
+        # black-holing STDOUT causes properties to not work
         self.player = Player(stderr=open('/dev/null', 'w'), autospawn=True)
         while True:
             notification = None
@@ -191,6 +197,8 @@ class Notifier(Thread):
                 self.send_sms(recipient=notification.recipient,
                               message=notification.message,
                               flash=notification.flash)
+            elif isinstance(notification, AudioNotification):
+                self.play_file(notification.message)
             else:
                 log.error('Unknown notification type {}'.format(notification.__class__))
 
@@ -756,10 +764,10 @@ class UploadEventHandler(FileSystemEventHandler):
                     log.exception('Cannot process {}'.format(snapshot_path))
 
 
-class LogTailEventHandler(Thread):
+class LogTailer(Thread):
 
     def __init__(self, log_label, log_path):
-        super(LogTailEventHandler, self).__init__()
+        super(LogTailer, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
 
@@ -781,10 +789,25 @@ class LogTailEventHandler(Thread):
         while True:
             try:
                 for line in Pygtail(self.log_path):
-                    # TODO: convert to source event
-                    log.info('{}: {}'.format(self.log_label, line))
+                    self.process_line(line)
             except Exception:
                 log.exception(self.log_path)
+
+    def process_line(self, log_line):
+        log.info('{}: {}'.format(self.log_label, log_line))
+
+
+class ApcEventTailer(LogTailer):
+
+    def __init__(self, log_label, log_path):
+        super(ApcEventTailer, self).__init__(log_label, log_path)
+
+    def process_line(self, log_line):
+        log_fields = log_line.split()
+        # extract the date data
+        date_info = dateutil.parser.parse(' '.join(log_fields[:3]))
+        log_entry = ' '.join(log_fields[4:])
+        log.info('{} @ {}: {}'.format(self.log_label, date_info, log_entry))
 
 
 class SampledSnapshotEventHandler(Thread):
@@ -977,6 +1000,8 @@ class SnapshotProcessor(Thread):
         relay_control_endpoint = config.get('zmq', 'relay_control')
         log.info('Relay control is at {}'.format(relay_control_endpoint))
         self.relay_control.connect(relay_control_endpoint)
+        self.notifier.send_pyobj(AudioNotification(message=os.path.join(TTS_DIR,
+                                                                        config.get('app', 'tts_startup_sound'))))
         while True:
             try:
                 snapshot = self.socket.recv_pyobj()
@@ -1162,10 +1187,10 @@ if __name__ == "__main__":
     log.debug('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # log tailer
-    for (log_label, log_path) in config.items('logged_events'):
-        log_tail_thread = LogTailEventHandler(log_label=log_label, log_path=log_path)
-        log_tail_thread.start()
-        threads_tracked.add(log_tail_thread.getName())
+    if config.has_option('logged_events', 'apcupsd'):
+        log_tailer = ApcEventTailer(log_label='apcupsd', log_path=config.get('logged_events', 'apcupsd'))
+        log_tailer.start()
+        threads_tracked.add(log_tailer.getName())
     # start threads
     notifier.start()
     threads_tracked.add(notifier.getName())
@@ -1188,7 +1213,6 @@ if __name__ == "__main__":
     threads_tracked.add(f.getName())
     try:
         # startup completed
-        notifier.play_file(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
         # back to INFO logging
         log.setLevel(logging.INFO)
         while True:
