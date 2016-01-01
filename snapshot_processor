@@ -1162,8 +1162,8 @@ if __name__ == "__main__":
     log.info('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # log tailer
-    for (log, path) in config.items('logged_events'):
-        log_tail_thread = LogTailEventHandler(log_label=log, log_path=path)
+    for (log_label, log_path) in config.items('logged_events'):
+        log_tail_thread = LogTailEventHandler(log_label=log_label, log_path=log_path)
         log_tail_thread.start()
         threads_tracked.add(log_tail_thread.getName())
     # start threads
