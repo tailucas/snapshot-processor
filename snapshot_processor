@@ -781,7 +781,6 @@ class LogTailer(Thread):
             raise RuntimeError('Tailing syslog will result in log feedback.')
 
         self.processor = zmq_context.socket(zmq.PUSH)
-        self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
 
     def run(self):
         log.info('Tailing log {} as {}'.format(self.log_path, self.log_label))
@@ -789,12 +788,15 @@ class LogTailer(Thread):
         while True:
             try:
                 for line in Pygtail(self.log_path):
-                    self.process_line(line)
+                    notification = self.process_line(line)
+                    if notification:
+                        self.processor.send_pyobj(notification)
             except Exception:
                 log.exception(self.log_path)
 
     def process_line(self, log_line):
         log.info('{}: {}'.format(self.log_label, log_line))
+        return None
 
 
 class ApcEventTailer(LogTailer):
@@ -803,11 +805,19 @@ class ApcEventTailer(LogTailer):
         super(ApcEventTailer, self).__init__(log_label, log_path)
 
     def process_line(self, log_line):
+        # skip this
+        if 'startup succeeded' in log_line:
+            return None
         log_fields = log_line.split()
         # extract the date data
-        date_info = dateutil.parser.parse(' '.join(log_fields[:3]))
+        timestamp = ' '.join(log_fields[:3])
         log_entry = ' '.join(log_fields[4:])
-        log.info('{} @ {}: {}'.format(self.log_label, date_info, log_entry))
+        log.info('{} @ {}: {}'.format(self.log_label, timestamp, log_entry))
+        #FIXME
+        payload = dict()
+        payload['timestamp'] = timestamp
+        payload['data'] = {'samples': {log_entry: 1}}
+        return SampledSnapshot(payload, 60)
 
 
 class SampledSnapshotEventHandler(Thread):
@@ -1053,6 +1063,13 @@ class SnapshotProcessor(Thread):
                 self.last_notification = time.time()
                 log.info('Sending notification for {}'.format(str(new_device_names)))
                 for device_name in new_device_names:
+                    #FIXME
+                    if 'House Alarm' in device_name or 'UPS' in device_name:
+                        self.notifier.send_pyobj(TTSNotification(message=device_name))
+                        for name, recipient in sms_owners.items():
+                            message = str(snapshot)
+                            log.info('Send SMS {} ({}) {} characters: {}'.format(name, recipient, len(message), message))
+                            self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
                     #FIXME
                     if device_name in ['Patio Motion Detector', 'Back Yard Motion Detector', 'Pool Motion Detector', 'Kitchen Door Motion Detector']:
                         if SnapshotProcessor._notification_ctrl:
