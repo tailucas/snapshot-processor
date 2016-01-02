@@ -1072,7 +1072,6 @@ class SnapshotProcessor(Thread):
                 for device_name in new_device_names:
                     #FIXME
                     if 'House Alarm' in device_name or 'UPS' in device_name:
-                        self.notifier.send_pyobj(TTSNotification(message=device_name))
                         if 'Self Test' not in device_name:
                             for name, recipient in sms_owners.items():
                                 message = str(snapshot)
