@@ -806,7 +806,7 @@ class ApcEventTailer(LogTailer):
 
     def process_line(self, log_line):
         # skip this
-        if 'startup succeeded' in log_line:
+        if 'startup succeeded' in log_line or 'apcupsd' in log_line:
             return None
         log_fields = log_line.split()
         # extract the date data
@@ -816,7 +816,12 @@ class ApcEventTailer(LogTailer):
         #FIXME
         payload = dict()
         parsed_timestamp = dateutil.parser.parse(timestamp)
-        payload['timestamp'] = datetime.utcfromtimestamp(parsed_timestamp).replace(tzinfo=pytz.utc).strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+        log.debug('Parsed timestamp is {}'.format(parsed_timestamp))
+        utc_timestamp = datetime.utcfromtimestamp(parsed_timestamp).replace(tzinfo=pytz.utc)
+        log.debug('UTC timestamp is {}'.format(utc_timestamp))
+        string_timestamp = utc_timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+        log.debug('UTC string timestamp is {}'.format(string_timestamp))
+        payload['timestamp'] = string_timestamp
         log.debug('{} updated to {}'.format(timestamp, parsed_timestamp))
         payload['data'] = {'samples': {log_entry: 1}}
         return SampledSnapshot(payload, 60)
