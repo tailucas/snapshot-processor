@@ -822,7 +822,7 @@ class ApcEventTailer(LogTailer):
         string_timestamp = utc_timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
         log.debug('UTC string timestamp is {}'.format(string_timestamp))
         payload['timestamp'] = string_timestamp
-        log.debug('{} updated to {}'.format(timestamp, parsed_timestamp))
+        log.debug('{} updated to {}'.format(timestamp, string_timestamp))
         payload['data'] = {'samples': {log_entry: 1}}
         return SampledSnapshot(payload, 60)
 
