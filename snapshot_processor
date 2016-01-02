@@ -812,7 +812,7 @@ class ApcEventTailer(LogTailer):
         # extract the date data
         timestamp = ' '.join(log_fields[:3])
         log_entry = ' '.join(log_fields[3:])
-        log.info('{} @ {}: {}'.format(self.log_label, timestamp, log_entry))
+        log.debug('{} @ {}: {}'.format(self.log_label, timestamp, log_entry))
         #FIXME
         payload = dict()
         parsed_timestamp = dateutil.parser.parse(timestamp)
