@@ -124,6 +124,8 @@ sed -e '/ISCONFIGURED/ s/^#*/#/' -i /etc/default/apcupsd
 echo "ISCONFIGURED=yes" >> /etc/default/apcupsd
 sed -e '/DEVICE/ s/^#*/#/' -i /etc/apcupsd/apcupsd.conf
 echo "DEVICE ${UPS_USB}" >> /etc/apcupsd/apcupsd.conf
+# to catch user self-test
+echo "POLLTIME 5" >> /etc/apcupsd/apcupsd.conf
 service apcupsd start
 # Pygtail log tailer
 touch /var/log/apcupsd.events.offset
