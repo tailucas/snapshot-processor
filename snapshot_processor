@@ -817,7 +817,7 @@ class ApcEventTailer(LogTailer):
         payload = dict()
         parsed_timestamp = dateutil.parser.parse(timestamp)
         log.debug('Parsed timestamp is {}'.format(parsed_timestamp))
-        utc_timestamp = datetime.utcfromtimestamp(parsed_timestamp).replace(tzinfo=pytz.utc)
+        utc_timestamp = datetime.astimezone(pytz.utc)
         log.debug('UTC timestamp is {}'.format(utc_timestamp))
         string_timestamp = utc_timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
         log.debug('UTC string timestamp is {}'.format(string_timestamp))
