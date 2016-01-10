@@ -74,7 +74,48 @@ cloud_storage = None
 rest_api = Flask(APP)
 zmq_context = zmq.Context()
 URL_WORKER_NOTIFIER = 'inproc://notifier'
+URL_WORKER_UPLOADER = 'inproc://uploader'
 URL_WORKER_SNAPSHOT_PROCESSOR = 'inproc://snapshot-processor'
+DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
+
+HEARTBEAT_INTERVAL_SECONDS = 5
+
+
+@staticmethod
+def make_payload(timestamp=None, data=None):
+    payload = dict()
+    if timestamp is None:
+        timestamp = time.time()
+    payload['timestamp'] = datetime.utcfromtimestamp(timestamp).replace(tzinfo=pytz.utc).strftime(DATE_FORMAT)
+    if data is not None and len(data) > 0:
+        payload['data'] = data
+    log.debug(json.dumps(payload))
+    return umsgpack.packb(payload)
+
+
+class Uploader(Thread):
+
+    def __init__(self):
+        super(Uploader, self).__init__(name=self.__class__.__name__)
+        self.daemon = True
+        # inproc socket to accept messages to publish
+        # to the outside world
+        self.inproc_pull = zmq_context.socket(zmq.PULL)
+        self.inproc_pull.bind(URL_WORKER_UPLOADER)
+
+    def run(self):
+        # Socket to talk to the outside world
+        publisher = zmq_context.socket(zmq.PUB)
+        publisher.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
+                                                  port=config.get('zmq', 'pubsub_port')))
+        while True:
+            try:
+                publisher.send(self.inproc_pull.recv())
+            except ContextTerminated:
+                break
+            except Exception:
+                log.exception(self.name)
+                continue
 
 
 class FileType(object):
@@ -137,8 +178,7 @@ class AudioNotification(Notification):
 class Notifier(Thread):
 
     def __init__(self, sms_provider):
-        super(Notifier, self).__init__()
-        self.name = self.__class__.__name__
+        super(Notifier, self).__init__(name=self.__class__.__name__)
         self.daemon = True
 
         self.player = None
@@ -997,8 +1037,7 @@ class SnapshotProcessor(Thread):
     _notification_ctrl = True
 
     def __init__(self):
-        super(SnapshotProcessor, self).__init__()
-        self.name = self.__class__.__name__
+        super(SnapshotProcessor, self).__init__(name=self.__class__.__name__)
         self.daemon = True
 
         self.notifier = zmq_context.socket(zmq.PUSH)
@@ -1180,6 +1219,9 @@ if __name__ == "__main__":
     observer.name = observer.__class__.__name__
     # threads that we want to ensure are alive
     threads_tracked = Set()
+    uploader = Uploader()
+    uploader.start()
+    threads_tracked.add(uploader.getName())
     # top-level types
     filetype = FileType()
     # sms
@@ -1235,6 +1277,24 @@ if __name__ == "__main__":
     f.setDaemon(True)
     f.start()
     threads_tracked.add(f.getName())
+    # construct the device representation
+    input_types = dict(config.items('input_type'))
+    input_locations = dict(config.items('input_location'))
+    output_types = dict(config.items('output_type'))
+    device_info = dict()
+    device_info['inputs'] = list()
+    for field, input_type in input_types.items():
+        device_info['inputs'].append({
+            'type': input_type,
+            'location': input_locations[field]
+        })
+    device_info['outputs'] = list()
+    for field, output_type in output_types.items():
+        device_info['outputs'].append({
+            'type': output_type,
+        })
+    uploader_socket = zmq_context.socket(zmq.PUSH)
+    uploader_socket.connect(URL_WORKER_UPLOADER)
     try:
         # startup completed
         # back to INFO logging
@@ -1249,11 +1309,15 @@ if __name__ == "__main__":
                 log.error(message)
                 # bail out
                 raise RuntimeError(message)
-            # TODO: check on overdue heartbeats?
-            time.sleep(60)
+            uploader_socket.send(make_payload(data={
+                        #TODO statistics
+                        #'statistics': {'sample_count': samples_processed},
+                        'device_info': device_info
+                    }))
+            time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, SystemExit):
         log.info('Stopping threads...')
         observer.stop()
         observer.join()
-        log.info('Closing subscribers...')
+        log.info('Closing messaging...')
         zmq_context.term()
