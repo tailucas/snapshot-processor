@@ -1,5 +1,5 @@
 PyDrive==1.0.1
-PyMPlayer==0.6.0
+mplayer.py==0.7.0
 RPi.GPIO==0.5.5
 argparse==1.2.1
 google-api-python-client==1.4.0
