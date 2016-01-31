@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libssl-dev \
     manpages \
-    mplayer2 \
+    mplayer \
     net-tools \
     openssh-server \
     openssl \
