@@ -53,6 +53,6 @@ COPY . /app
 COPY ./entrypoint.sh /
 
 # awslogs
-RUN ./awslogs-agent-setup.sh
+RUN /app/awslogs-agent-setup.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
