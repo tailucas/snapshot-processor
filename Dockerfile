@@ -32,11 +32,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     vim \
     vsftpd \
-    wget
+    wget \
+    && pip install -U pip
 
 COPY ./config/pip_freeze /tmp/
-# update pip
-RUN pip install -U pip
 RUN pip install --upgrade setuptools
 RUN pip install -r /tmp/pip_freeze
 # show outdated packages since the freeze
