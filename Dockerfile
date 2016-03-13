@@ -53,7 +53,4 @@ RUN mkdir /root/.ssh/
 COPY . /app
 COPY ./entrypoint.sh /
 
-# awslogs
-RUN /app/awslogs-agent-setup.sh
-
 ENTRYPOINT ["/entrypoint.sh"]
