@@ -67,13 +67,21 @@ echo "127.0.1.1 ${DEVICE_NAME}" >> /etc/hosts
 unset DEVICE_NAME
 
 if [ -n "${RSYSLOG_SERVER:-}" ] && ! grep -q "$RSYSLOG_SERVER" /etc/rsyslog.conf; then
-  echo "*.*          @${RSYSLOG_SERVER}" | tee -a /etc/rsyslog.conf
+  set +x
+  if [ -n "${RSYSLOG_TOKEN:-}" ] && ! grep -q "$RSYSLOG_TOKEN" /etc/rsyslog.conf; then
+    echo "\$template LogentriesFormat,\"${RSYSLOG_TOKEN} %HOSTNAME% %syslogtag%%msg%\n\"" >> /etc/rsyslog.conf
+    RSYSLOG_TEMPLATE=";LogentriesFormat"
+  fi
+  set -x
+  echo "*.*          @@${RSYSLOG_SERVER}${RSYSLOG_TEMPLATE:-}" | tee -a /etc/rsyslog.conf
 fi
 
 # log archival (no tee for secrets)
-cat /var/awslogs/etc/aws.conf | python /app/config_interpol /app/config/aws.conf > /var/awslogs/etc/aws.conf.new
-mv /var/awslogs/etc/aws.conf /var/awslogs/etc/aws.conf.backup
-mv /var/awslogs/etc/aws.conf.new /var/awslogs/etc/aws.conf
+if [ -d /var/awslogs/etc/ ]; then
+  cat /var/awslogs/etc/aws.conf | python /app/config_interpol /app/config/aws.conf > /var/awslogs/etc/aws.conf.new
+  mv /var/awslogs/etc/aws.conf /var/awslogs/etc/aws.conf.backup
+  mv /var/awslogs/etc/aws.conf.new /var/awslogs/etc/aws.conf
+fi
 
 # remove unnecessary kernel drivers
 rmmod w1_gpio||true
