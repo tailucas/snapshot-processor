@@ -407,7 +407,7 @@ class SampledSnapshot(Snapshot):
             self.source_label = self.snapshot_data['location']
         self.timestamp_data = dateutil.parser.parse(self.snapshot_data['timestamp'])
         if self.timestamp_data.tzinfo is None:
-            # we use the phyiscal locality of this device for timezone
+            # we use the physical locality of this device for timezone
             self.timestamp_data = self.timestamp_data.replace(tzinfo=tz.tzlocal())
         if 'data' in self.snapshot_data:
             if 'samples' in self.snapshot_data['data']:
@@ -745,16 +745,18 @@ class UploadEventHandler(FileSystemEventHandler):
         self.last_modified = None
         self._cloud_storage = cloud_storage
         self.image_dirs = dict()
+        self.image_devices = dict()
 
-        fs_observer.schedule(self, config.get('snapshots', 'root_dir'), recursive=True)
+        fs_observer.schedule(self, snapshot_root, recursive=True)
 
         self.processor = zmq_context.socket(zmq.PUSH)
         self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
 
-    def add_image_dir(self, source_label, image_dir):
+    def add_image_dir(self, device_key, source_label, image_dir):
         if source_label in self.image_dirs:
             raise RuntimeError('Image source label {} is already configured.'.format(source_label))
         self.image_dirs[source_label] = image_dir
+        self.image_devices[device_key] = image_dir
 
     def _image_dir_label(self, event_directory):
         for dir_label, image_dir in self.image_dirs.iteritems():
@@ -841,8 +843,9 @@ class LogTailer(Thread):
 
 class ApcEventTailer(LogTailer):
 
-    def __init__(self, log_label, log_path):
+    def __init__(self, device_key, log_label, log_path):
         super(ApcEventTailer, self).__init__(log_label, log_path)
+        self.device_key = device_key
 
     def process_line(self, log_line):
         # skip this
@@ -1206,14 +1209,33 @@ if __name__ == "__main__":
         stream_handler = logging.StreamHandler(stream=sys.stdout)
         stream_handler.setFormatter(formatter)
         log.addHandler(stream_handler)
-    # set up config
-    image_labels = dict(config.items('images_sources'))
-    image_snapshot_dirs = dict(config.items('image_snapshot_dirs'))
+    image_sources = dict()
+    ups_source = None
+    # construct the device representation
+    input_types = dict(config.items('input_type'))
+    input_locations = dict(config.items('input_location'))
+    output_types = dict(config.items('output_type'))
+    device_info = dict()
+    device_info['inputs'] = list()
+    for field, input_type in input_types.items():
+        input_location = input_locations[field]
+        device_key = '{} {}'.format(input_locations[field], input_type)
+        device_info['inputs'].append({
+            'type': input_type,
+            'location': input_location,
+            'device_key': device_key
+        })
+        if input_type.lower() == 'camera':
+            image_sources[device_key] = input_location
+        elif input_type.lower() == 'ups':
+            ups_source = device_key
+    device_info['outputs'] = list()
+    for field, output_type in output_types.items():
+        device_info['outputs'].append({
+            'type': output_type,
+        })
     # set up signal handlers
     signal.signal(signal.SIGHUP, signal_handler)
-    # remap the labels to the directories
-    if len(image_labels) != len(image_snapshot_dirs):
-        raise RuntimeError('Invalid configuration. Sources and associated labels must match.')
     # file system listener
     observer = Observer()
     observer.name = observer.__class__.__name__
@@ -1248,13 +1270,21 @@ if __name__ == "__main__":
     cloud_storage = google_drive
     upload_event_handler = UploadEventHandler(cloud_storage=google_drive, fs_observer=observer)
     # monitor these directories
-    for source, label in image_labels.iteritems():
-        upload_event_handler.add_image_dir(source_label=label, image_dir=image_snapshot_dirs[source])
+    for device_key, image_source in image_sources.items():
+        upload_event_handler.add_image_dir(
+            device_key=device_key,
+            source_label=image_source,
+            image_dir=os.path.join(config.get('snapshots', 'upload_dir'), image_source.lower()))
     log.debug('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # log tailer
     if config.has_option('logged_events', 'apcupsd'):
-        log_tailer = ApcEventTailer(log_label='apcupsd', log_path=config.get('logged_events', 'apcupsd'))
+        if ups_source is None:
+            raise RuntimeError('apcupsd log is configured without UPS source.')
+        log_tailer = ApcEventTailer(
+            device_key=ups_source,
+            log_label='apcupsd',
+            log_path=config.get('logged_events', 'apcupsd'))
         log_tailer.start()
         threads_tracked.add(log_tailer.getName())
     # start threads
@@ -1277,22 +1307,6 @@ if __name__ == "__main__":
     f.setDaemon(True)
     f.start()
     threads_tracked.add(f.getName())
-    # construct the device representation
-    input_types = dict(config.items('input_type'))
-    input_locations = dict(config.items('input_location'))
-    output_types = dict(config.items('output_type'))
-    device_info = dict()
-    device_info['inputs'] = list()
-    for field, input_type in input_types.items():
-        device_info['inputs'].append({
-            'type': input_type,
-            'location': input_locations[field]
-        })
-    device_info['outputs'] = list()
-    for field, output_type in output_types.items():
-        device_info['outputs'].append({
-            'type': output_type,
-        })
     uploader_socket = zmq_context.socket(zmq.PUSH)
     uploader_socket.connect(URL_WORKER_UPLOADER)
     try:
