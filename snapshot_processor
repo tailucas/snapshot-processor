@@ -548,7 +548,7 @@ class CloudStorage(object):
         return NotImplemented
 
 
-class GoogleDriveManager(Thread, CloudStorage):
+class GoogleDriveManager(CloudStorage):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
         super(GoogleDriveManager, self).__init__()
@@ -562,42 +562,10 @@ class GoogleDriveManager(Thread, CloudStorage):
             self._gauth_creds_file = os.path.abspath(gauth_creds_file)
         self.drive = GoogleDrive(self.gauth)
         self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, gdrive_folder)
-        # separate connection for archiver thread to prevent PyDrive lock-up
-        self._archive_drive = GoogleDrive(self.gauth)
-        self._folder_id_cache = dict()
 
     @property
     def cloud_storage_url(self):
         return self._gdrive_folder_url
-
-    def run(self):
-        while True:
-            log.debug('Finding files in {} ({}) to archive.'.format(self._gdrive_folder, self._gdrive_folder_id))
-            try:
-                file_list = self._archive_drive.ListFile({
-                    'q': "'{}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'".format(
-                        self._gdrive_folder_id
-                    ),
-                    'maxResults': 100,
-                })
-                archived = 0
-                try:
-                    while True:
-                        page = file_list.GetList()
-                        log.info('Inspecting {} files for archival...'.format(len(page)))
-                        for file1 in page:
-                            if self.archive(gdrive=self._archive_drive,
-                                            gdrive_file=file1,
-                                            root_folder_id=self._gdrive_folder_id):
-                                archived += 1
-                except StopIteration:
-                    log.info('Archived {} image snapshots.'.format(archived))
-            except (ApiRequestError, FileNotUploadedError):
-                log.exception('Archived {} image snapshots.'.format(archived))
-            # prevent memory leaks
-            self._folder_id_cache.clear()
-            # sleep until tomorrow
-            sleep(60*60*24)
 
     @property
     def gauth(self):
@@ -653,6 +621,49 @@ class GoogleDriveManager(Thread, CloudStorage):
             folder_link))
         return folder_id, folder_link
 
+
+class GoogleDriveArchiver(Thread, GoogleDriveManager):
+
+    def __init__(self, gauth_creds_file, gdrive_folder):
+        super(GoogleDriveArchiver, self).__init__(
+            gauth_creds_file=gauth_creds_file,
+            gdrive_folder=gdrive_folder)
+        self.name = self.__class__.__name__
+        self.daemon = True
+
+        # separate connection for archiver thread to prevent PyDrive lock-up
+        self._archive_drive = GoogleDrive(self.gauth)
+        self._folder_id_cache = dict()
+
+    def run(self):
+        while True:
+            log.debug('Finding files in {} ({}) to archive.'.format(self._gdrive_folder, self._gdrive_folder_id))
+            try:
+                file_list = self._archive_drive.ListFile({
+                    'q': "'{}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'".format(
+                        self._gdrive_folder_id
+                    ),
+                    'maxResults': 100,
+                })
+                archived = 0
+                try:
+                    while True:
+                        page = file_list.GetList()
+                        log.info('Inspecting {} files for archival...'.format(len(page)))
+                        for file1 in page:
+                            if self.archive(gdrive=self._archive_drive,
+                                            gdrive_file=file1,
+                                            root_folder_id=self._gdrive_folder_id):
+                                archived += 1
+                except StopIteration:
+                    log.info('Archived {} image snapshots.'.format(archived))
+            except (ApiRequestError, FileNotUploadedError):
+                log.exception('Archived {} image snapshots.'.format(archived))
+            # prevent memory leaks
+            self._folder_id_cache.clear()
+            # sleep until tomorrow
+            sleep(60*60*24)
+
     def archive(self, gdrive, gdrive_file, root_folder_id):
         filename = gdrive_file['title']
         now = datetime.utcnow().replace(tzinfo=pytz.utc)
@@ -701,6 +712,20 @@ class GoogleDriveManager(Thread, CloudStorage):
             return True
         return False
 
+
+class GoogleDriveUploader(Thread, GoogleDriveManager):
+
+    def __init__(self, gauth_creds_file, gdrive_folder):
+        super(GoogleDriveUploader, self).__init__(
+            gauth_creds_file=gauth_creds_file,
+            gdrive_folder=gdrive_folder)
+        self.name = self.__class__.__name__
+        self.daemon = True
+
+    def run(self):
+        while True:
+            pass
+
     def upload(self, file_path, created_time=None):
         # upload the snapshot
         mime_type = filetype.mime_type(file_path)
@@ -746,28 +771,29 @@ class UploadEventHandler(FileSystemEventHandler):
         self.last_modified = None
         self._cloud_storage = cloud_storage
         self.image_dirs = dict()
-        self.image_devices = dict()
 
         fs_observer.schedule(self, snapshot_root, recursive=True)
 
         self.processor = zmq_context.socket(zmq.PUSH)
         self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
 
-    def add_image_dir(self, device_key, source_label, image_dir):
-        if source_label in self.image_dirs:
-            raise RuntimeError('Image source label {} is already configured.'.format(source_label))
-        self.image_dirs[source_label] = image_dir
-        self.image_devices[device_key] = image_dir
+        self.event_processor_socket = zmq_context.socket(zmq.PUSH)
+        self.event_processor_socket.connect(URL_WORKER_EVENT_PROCESSOR)
 
-    def _image_dir_label(self, event_directory):
-        for dir_label, image_dir in self.image_dirs.iteritems():
+    def add_image_dir(self, device_key, source_label, image_dir):
+        if image_dir in self.image_dirs:
+            raise RuntimeError('Image source label {} is already configured.'.format(source_label))
+        self.image_dirs[image_dir] = (device_key, source_label)
+
+    def _image_dir_details(self, event_directory):
+        for image_dir, image_dir_details in self.image_dirs.iteritems():
             if image_dir in event_directory:
-                return dir_label
+                return image_dir_details
         return None
 
     @property
     def watched_dirs(self):
-        return self.image_dirs.items()
+        return self.image_dirs.values()
 
     # we listen to on-modified events because the file is
     # created and then written to subsequently.
@@ -789,7 +815,7 @@ class UploadEventHandler(FileSystemEventHandler):
                 # noinspection PyBroadException
                 try:
                     # image snapshot?
-                    source_label = self._image_dir_label(snapshot_path)
+                    device_key, source_label = self._image_dir_details(snapshot_path)
                     if source_label:
                         # create the snapshot data
                         snapshot = ImageSnapshot(
@@ -798,6 +824,7 @@ class UploadEventHandler(FileSystemEventHandler):
                             validity_seconds=snapshot_validity_seconds)
                         log.info('Snapshot: {} from {}'.format(snapshot, snapshot_path))
                         self.processor.send_pyobj(snapshot)
+                        self.event_processor_socket.send_pyobj(snapshot)
                         # upload the image snapshot
                         if self._cloud_storage:
                             self._cloud_storage.upload(
@@ -809,11 +836,12 @@ class UploadEventHandler(FileSystemEventHandler):
 
 class LogTailer(Thread):
 
-    def __init__(self, log_label, log_path):
+    def __init__(self, device_key, log_label, log_path):
         super(LogTailer, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
 
+        self.device_key = device_key
         self.log_label = log_label
         self.log_path = log_path
 
@@ -823,17 +851,17 @@ class LogTailer(Thread):
         if 'syslog' in self.log_file:
             raise RuntimeError('Tailing syslog will result in log feedback.')
 
-        self.processor = zmq_context.socket(zmq.PUSH)
+        self.event_processor_socket = zmq_context.socket(zmq.PUSH)
 
     def run(self):
         log.info('Tailing log {} as {}'.format(self.log_path, self.log_label))
-        self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
+        self.event_processor_socket.connect(URL_WORKER_EVENT_PROCESSOR)
         while True:
             try:
                 for line in Pygtail(self.log_path):
                     notification = self.process_line(line)
                     if notification:
-                        self.processor.send_pyobj(notification)
+                        self.event_processor_socket.send_pyobj(notification)
             except Exception:
                 log.exception(self.log_path)
 
@@ -845,8 +873,7 @@ class LogTailer(Thread):
 class ApcEventTailer(LogTailer):
 
     def __init__(self, device_key, log_label, log_path):
-        super(ApcEventTailer, self).__init__(log_label, log_path)
-        self.device_key = device_key
+        super(ApcEventTailer, self).__init__(device_key, log_label, log_path)
 
     def process_line(self, log_line):
         # skip this
