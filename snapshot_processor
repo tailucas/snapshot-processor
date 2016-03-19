@@ -76,6 +76,7 @@ zmq_context = zmq.Context()
 URL_WORKER_NOTIFIER = 'inproc://notifier'
 URL_WORKER_UPLOADER = 'inproc://uploader'
 URL_WORKER_SNAPSHOT_PROCESSOR = 'inproc://snapshot-processor'
+URL_WORKER_EVENT_PROCESSOR = 'inproc://event-processor'
 DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 
 HEARTBEAT_INTERVAL_SECONDS = 5
@@ -1148,6 +1149,111 @@ class SnapshotProcessor(Thread):
                     snapshot.timestamp))
 
 
+class EventProcessor(Thread):
+
+    def __init__(self):
+        super(EventProcessor, self).__init__(name=self.__class__.__name__)
+        self.daemon = True
+
+        self.socket = zmq_context.socket(zmq.PULL)
+        self.socket.bind(URL_WORKER_EVENT_PROCESSOR)
+
+        self.uploader_socket = zmq_context.socket(zmq.PUSH)
+
+        self.active_devices = dict()
+        self.latest_event = datetime.utcnow().replace(tzinfo=pytz.utc)
+        self.last_notification = 0
+
+    def run(self):
+        self.uploader_socket.connect(URL_WORKER_UPLOADER)
+
+        while True:
+            try:
+                snapshot = self.socket.recv_pyobj()
+            except ContextTerminated:
+                break
+            except Exception:
+                log.exception(self.__class__.__name__)
+                continue
+            log_msg = 'Processing: {}'.format(snapshot)
+            if len(snapshot.devices) > 0:
+                log.info(log_msg)
+            else:
+                log.debug(log_msg)
+            if snapshot.is_expired:
+                log.debug('Discarding expired snapshot {}'.format(snapshot))
+                continue
+            # only non-expired snapshots qualify as recent updates
+            # throw away expired devices
+            for device_name in self.active_devices.keys():
+                if datetime.utcnow().replace(tzinfo=pytz.utc) - self.active_devices[device_name] > timedelta(seconds=snapshot.validity_seconds):
+                    del self.active_devices[device_name]
+            # anything to process?
+            if len(snapshot.devices) == 0:
+                continue
+            # make a copy of the remaining, active devices
+            old_device_names = self.active_devices.keys()
+            # refresh the active devices
+            for device_name in snapshot.device_names:
+                self.active_devices[device_name] = snapshot.timestamp
+            # determine the new devices
+            new_device_names = list(set(self.active_devices.keys()) - set(old_device_names))
+            if len(self.active_devices) > 0 or len(new_device_names) > 0:
+                log.debug('{} active device(s) ({}), {} new ({}).'.format(
+                    len(self.active_devices),
+                    ','.join(self.active_devices.keys()),
+                    len(new_device_names),
+                    ','.join(new_device_names)))
+            last_notified = time.time() - self.last_notification
+            # notify if the notification interval has elapsed or if there are new devices
+            # and if the snapshot is newer than the last one for which a notification was sent
+            if (last_notified > notification_interval_seconds or len(new_device_names) > 0) \
+                    and self.latest_snapshot < snapshot.timestamp:
+                log.debug('Setting latest snapshot [{}] to [{}] from {} ({})'.format(
+                    self.latest_snapshot,
+                    snapshot.timestamp,
+                    snapshot.device_names,
+                    snapshot))
+                self.latest_snapshot = snapshot.timestamp
+                self.last_notification = time.time()
+                log.info('Sending notification for {}'.format(str(new_device_names)))
+                for device_name in new_device_names:
+                    #FIXME
+                    if 'House Alarm' in device_name or 'UPS' in device_name or 'Smoke Detector' in device_name:
+                        if 'Self Test' not in device_name:
+                            for name, recipient in sms_owners.items():
+                                message = str(snapshot)
+                                log.info('Send SMS {} ({}) {} characters: {}'.format(name, recipient, len(message), message))
+                                self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
+                    #FIXME
+                    if device_name in ['Patio Motion Detector', 'Back Yard Motion Detector', 'Pool Motion Detector', 'Kitchen Door Motion Detector']:
+                        if SnapshotProcessor._notification_ctrl:
+                            self.notifier.send_pyobj(TTSNotification(message=device_name))
+                    else:
+                        self.notifier.send_pyobj(TTSNotification(message=device_name))
+                    if isinstance(snapshot, ImageSnapshot):
+                        for name, recipient in sms_owners.items():
+                            message = '{}: {}'.format(snapshot, cloud_storage.cloud_storage_url)
+                            log.info('Send SMS {} ({}) {} characters: {}'.format(name, recipient, len(message), message))
+                            self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
+                    #FIXME
+                    if SnapshotProcessor._relay_ctrl:
+                        if device_name in ['Patio Motion Detector', 'Back Yard Motion Detector', 'Pool Motion Detector', 'Kitchen Door Motion Detector']:
+                            relays = 1
+                            relay_activations = dict()
+                            for i in range(1, relays+1):
+                                relay_activations['relay{}'.format(i)] = {'state': True, 'delay': 2}
+                            payload = dict()
+                            payload['relays'] = relay_activations
+                            log.info("Sending relay control: '{}'".format(payload))
+                            self.relay_control.send(umsgpack.packb(payload))
+            else:
+                log.debug("Not notifying yet, last notified: [{}], latest snapshot: [{}], current snapshot: [{}]".format(
+                    last_notified,
+                    self.latest_snapshot,
+                    snapshot.timestamp))
+
+
 def signal_handler(signum, frame):
     log.warn('Signal {} received.'.format(signum))
     log.setLevel(logging.DEBUG)
@@ -1195,6 +1301,19 @@ def index():
 
 def run_flask():
     rest_api.run(host=config.get('app', 'eth0_ip'), port=5000)
+
+
+def thread_nanny(threads_tracked):
+    while True:
+        # TODO: exit on thread death?
+        threads_alive = Set()
+        for thread_info in threading.enumerate():
+            if thread_info.isAlive():
+                threads_alive.add(thread_info.getName())
+        if len(threads_tracked - threads_alive) > 0:
+            message = 'A thread has died. Expected threads are [{}], missing is [{}].'.format(threads_tracked, threads_tracked - threads_alive)
+            log.error(message)
+        time.sleep(10)
 
 
 if __name__ == "__main__":
@@ -1259,7 +1378,8 @@ if __name__ == "__main__":
         raise RuntimeError('Unknown SMS method specified: {}'.format(sms_method))
     # application threads
     notifier = Notifier(sms_provider=sms_provider)
-    processor = SnapshotProcessor()
+    event_processor = EventProcessor()
+    snapshot_processor = SnapshotProcessor()
     # sampled snapshot processing
     sample_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'sample_publisher'))
     detector_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'detector_publisher'))
@@ -1290,8 +1410,10 @@ if __name__ == "__main__":
     # start threads
     notifier.start()
     threads_tracked.add(notifier.getName())
-    processor.start()
-    threads_tracked.add(processor.getName())
+    event_processor.start()
+    threads_tracked.add(event_processor.getName())
+    snapshot_processor.start()
+    threads_tracked.add(snapshot_processor.getName())
     # start the collectors
     sample_event_handler.start()
     threads_tracked.add(sample_event_handler.getName())
@@ -1307,27 +1429,24 @@ if __name__ == "__main__":
     f.setDaemon(True)
     f.start()
     threads_tracked.add(f.getName())
-    uploader_socket = zmq_context.socket(zmq.PUSH)
-    uploader_socket.connect(URL_WORKER_UPLOADER)
+
+    f = threading.Thread(name='nanny', target=thread_nanny, args=(threads_tracked,))
+    f.setDaemon(True)
+    f.start()
+
+    event_processor_socket = zmq_context.socket(zmq.PUSH)
+    event_processor_socket.connect(URL_WORKER_EVENT_PROCESSOR)
+
     try:
         # startup completed
         # back to INFO logging
         log.setLevel(logging.INFO)
         while True:
-            threads_alive = Set()
-            for thread_info in threading.enumerate():
-                if thread_info.isAlive():
-                    threads_alive.add(thread_info.getName())
-            if len(threads_tracked - threads_alive) > 0:
-                message = 'A thread has died. Expected threads are [{}], missing is [{}].'.format(threads_tracked, threads_tracked - threads_alive)
-                log.error(message)
-                # bail out
-                raise RuntimeError(message)
-            uploader_socket.send(make_payload(data={
+            event_processor_socket.send_pyobj({
                         #TODO statistics
                         #'statistics': {'sample_count': samples_processed},
                         'device_info': device_info
-                    }))
+                    })
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, SystemExit):
         log.info('Stopping threads...')
