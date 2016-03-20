@@ -1221,7 +1221,12 @@ class EventProcessor(Thread):
             except Exception:
                 log.exception(self.__class__.__name__)
                 continue
-            log_msg = 'Processing: {}'.format(snapshot)
+            # pass-thru
+            if not isinstance(snapshot, Snapshot):
+                log.warn("Unsupported snapshot, will pass-through: '{}'".format(snapshot))
+                self.uploader_socket.send(make_payload(data=snapshot))
+                continue
+            log_msg = 'Processing snapshot: {}'.format(snapshot)
             if len(snapshot.devices) > 0:
                 log.info(log_msg)
             else:
@@ -1329,7 +1334,7 @@ def thread_nanny(threads_tracked):
         if len(threads_tracked - threads_alive) > 0:
             message = 'A thread has died. Expected threads are [{}], missing is [{}].'.format(threads_tracked, threads_tracked - threads_alive)
             log.error(message)
-            exit(1)
+            sys.exit(1)
         time.sleep(10)
 
 
@@ -1450,24 +1455,20 @@ if __name__ == "__main__":
     f.setDaemon(True)
     f.start()
     threads_tracked.add(f.getName())
-
     f = threading.Thread(name='nanny', target=thread_nanny, args=(threads_tracked,))
     f.setDaemon(True)
     f.start()
-
-    event_processor_socket = zmq_context.socket(zmq.PUSH)
-    event_processor_socket.connect(URL_WORKER_EVENT_PROCESSOR)
-
+    uploader_socket = zmq_context.socket(zmq.PUSH)
+    uploader_socket.connect(URL_WORKER_UPLOADER)
     try:
         # startup completed
         # back to INFO logging
         log.setLevel(logging.INFO)
         while True:
-            event_processor_socket.send_pyobj({
+            uploader_socket.send(make_payload(data={
                         #TODO statistics
-                        #'statistics': {'sample_count': samples_processed},
                         'device_info': device_info
-                    })
+                    }))
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, SystemExit):
         log.info('Stopping threads...')
