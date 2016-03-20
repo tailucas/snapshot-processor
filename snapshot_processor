@@ -77,6 +77,7 @@ URL_WORKER_NOTIFIER = 'inproc://notifier'
 URL_WORKER_UPLOADER = 'inproc://uploader'
 URL_WORKER_SNAPSHOT_PROCESSOR = 'inproc://snapshot-processor'
 URL_WORKER_EVENT_PROCESSOR = 'inproc://event-processor'
+URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 
 HEARTBEAT_INTERVAL_SECONDS = 5
@@ -109,12 +110,23 @@ class Uploader(Thread):
         publisher.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
                                                   port=config.get('zmq', 'pubsub_port')))
         while True:
+            event = None
+            timestamp = None
             try:
-                publisher.send(self.inproc_pull.recv())
+                event = self.inproc_pull.recv_pyobj()
             except ContextTerminated:
                 break
             except Exception:
-                log.exception(self.name)
+                log.exception(self.__class__.__name__)
+                continue
+            if isinstance(event, Snapshot):
+                timestamp = event.timestamp
+            try:
+                publisher.send(make_payload(timestamp, event))
+            except ContextTerminated:
+                break
+            except Exception:
+                log.exception(self.__class__.__name__)
                 continue
 
 
@@ -722,9 +734,19 @@ class GoogleDriveUploader(Thread, GoogleDriveManager):
         self.name = self.__class__.__name__
         self.daemon = True
 
+        self.socket = zmq_context.socket(zmq.PULL)
+        self.socket.bind(URL_WORKER_CLOUD_STORAGE)
+
     def run(self):
         while True:
-            pass
+            try:
+                (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
+                self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
+            except ContextTerminated:
+                break
+            except Exception:
+                log.exception(self.__class__.__name__)
+                continue
 
     def upload(self, file_path, created_time=None):
         # upload the snapshot
@@ -766,16 +788,18 @@ class GoogleDriveUploader(Thread, GoogleDriveManager):
 
 class UploadEventHandler(FileSystemEventHandler):
 
-    def __init__(self, cloud_storage, fs_observer):
+    def __init__(self, fs_observer):
         super(UploadEventHandler, self).__init__()
         self.last_modified = None
-        self._cloud_storage = cloud_storage
         self.image_dirs = dict()
 
         fs_observer.schedule(self, snapshot_root, recursive=True)
 
         self.processor = zmq_context.socket(zmq.PUSH)
         self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
+
+        self.cloud_storage_socket = zmq_context.socket(zmq.PUSH)
+        self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
         self.event_processor_socket = zmq_context.socket(zmq.PUSH)
         self.event_processor_socket.connect(URL_WORKER_EVENT_PROCESSOR)
@@ -826,10 +850,10 @@ class UploadEventHandler(FileSystemEventHandler):
                         self.processor.send_pyobj(snapshot)
                         self.event_processor_socket.send_pyobj(snapshot)
                         # upload the image snapshot
-                        if self._cloud_storage:
-                            self._cloud_storage.upload(
-                                file_path=snapshot_path,
-                                created_time=snapshot.timestamp)
+                        self.cloud_storage_socket.send_pyobj((
+                            snapshot_path,
+                            snapshot.timestamp
+                        ))
                 except Exception:
                     log.exception('Cannot process {}'.format(snapshot_path))
 
@@ -1193,7 +1217,6 @@ class EventProcessor(Thread):
 
     def run(self):
         self.uploader_socket.connect(URL_WORKER_UPLOADER)
-
         while True:
             try:
                 snapshot = self.socket.recv_pyobj()
@@ -1244,36 +1267,7 @@ class EventProcessor(Thread):
                 self.latest_snapshot = snapshot.timestamp
                 self.last_notification = time.time()
                 log.info('Sending notification for {}'.format(str(new_device_names)))
-                for device_name in new_device_names:
-                    #FIXME
-                    if 'House Alarm' in device_name or 'UPS' in device_name or 'Smoke Detector' in device_name:
-                        if 'Self Test' not in device_name:
-                            for name, recipient in sms_owners.items():
-                                message = str(snapshot)
-                                log.info('Send SMS {} ({}) {} characters: {}'.format(name, recipient, len(message), message))
-                                self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
-                    #FIXME
-                    if device_name in ['Patio Motion Detector', 'Back Yard Motion Detector', 'Pool Motion Detector', 'Kitchen Door Motion Detector']:
-                        if SnapshotProcessor._notification_ctrl:
-                            self.notifier.send_pyobj(TTSNotification(message=device_name))
-                    else:
-                        self.notifier.send_pyobj(TTSNotification(message=device_name))
-                    if isinstance(snapshot, ImageSnapshot):
-                        for name, recipient in sms_owners.items():
-                            message = '{}: {}'.format(snapshot, cloud_storage.cloud_storage_url)
-                            log.info('Send SMS {} ({}) {} characters: {}'.format(name, recipient, len(message), message))
-                            self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
-                    #FIXME
-                    if SnapshotProcessor._relay_ctrl:
-                        if device_name in ['Patio Motion Detector', 'Back Yard Motion Detector', 'Pool Motion Detector', 'Kitchen Door Motion Detector']:
-                            relays = 1
-                            relay_activations = dict()
-                            for i in range(1, relays+1):
-                                relay_activations['relay{}'.format(i)] = {'state': True, 'delay': 2}
-                            payload = dict()
-                            payload['relays'] = relay_activations
-                            log.info("Sending relay control: '{}'".format(payload))
-                            self.relay_control.send(umsgpack.packb(payload))
+                self.uploader_socket.send_pyobj(snapshot)
             else:
                 log.debug("Not notifying yet, last notified: [{}], latest snapshot: [{}], current snapshot: [{}]".format(
                     last_notified,
@@ -1332,7 +1326,6 @@ def run_flask():
 
 def thread_nanny(threads_tracked):
     while True:
-        # TODO: exit on thread death?
         threads_alive = Set()
         for thread_info in threading.enumerate():
             if thread_info.isAlive():
@@ -1340,6 +1333,7 @@ def thread_nanny(threads_tracked):
         if len(threads_tracked - threads_alive) > 0:
             message = 'A thread has died. Expected threads are [{}], missing is [{}].'.format(threads_tracked, threads_tracked - threads_alive)
             log.error(message)
+            exit(1)
         time.sleep(10)
 
 
@@ -1411,11 +1405,13 @@ if __name__ == "__main__":
     sample_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'sample_publisher'))
     detector_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'detector_publisher'))
     # ensure that auth is properly set up first
-    google_drive = GoogleDriveManager(
+    google_drive_archiver = GoogleDriveArchiver(
         gauth_creds_file=config.get('gdrive', 'creds_file'),
         gdrive_folder=config.get('gdrive', 'folder'))
-    cloud_storage = google_drive
-    upload_event_handler = UploadEventHandler(cloud_storage=google_drive, fs_observer=observer)
+    google_drive_uploader = GoogleDriveUploader(
+        gauth_creds_file=config.get('gdrive', 'creds_file'),
+        gdrive_folder=config.get('gdrive', 'folder'))
+    upload_event_handler = UploadEventHandler(fs_observer=observer)
     # monitor these directories
     for device_key, image_source in image_sources.items():
         upload_event_handler.add_image_dir(
@@ -1442,6 +1438,8 @@ if __name__ == "__main__":
     snapshot_processor.start()
     threads_tracked.add(snapshot_processor.getName())
     # start the collectors
+    google_drive_uploader.start()
+    threads_tracked.add(google_drive_uploader.getName())
     sample_event_handler.start()
     threads_tracked.add(sample_event_handler.getName())
     detector_event_handler.start()
@@ -1449,8 +1447,8 @@ if __name__ == "__main__":
     observer.start()
     threads_tracked.add(observer.getName())
     # start the Google Driver archiver last
-    google_drive.start()
-    threads_tracked.add(google_drive.getName())
+    google_drive_archiver.start()
+    threads_tracked.add(google_drive_archiver.getName())
     # start the REST interface
     f = threading.Thread(name='flask', target=run_flask)
     f.setDaemon(True)
