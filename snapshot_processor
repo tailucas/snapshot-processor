@@ -83,17 +83,6 @@ DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 HEARTBEAT_INTERVAL_SECONDS = 5
 
 
-def make_payload(timestamp=None, data=None):
-    payload = dict()
-    if timestamp is None:
-        timestamp = time.time()
-    payload['timestamp'] = datetime.utcfromtimestamp(timestamp).replace(tzinfo=pytz.utc).strftime(DATE_FORMAT)
-    if data is not None and len(data) > 0:
-        payload['data'] = data
-    log.debug(json.dumps(payload))
-    return umsgpack.packb(payload)
-
-
 class Uploader(Thread):
 
     def __init__(self):
@@ -122,13 +111,23 @@ class Uploader(Thread):
             if isinstance(event, Snapshot):
                 timestamp = event.timestamp
             try:
-                publisher.send(make_payload(timestamp, event))
+                publisher.send(Uploader.make_payload(timestamp, event))
             except ContextTerminated:
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
                 continue
 
+    @staticmethod
+    def make_payload(timestamp=None, data=None):
+        payload = dict()
+        if timestamp is None:
+            timestamp = time.time()
+        payload['timestamp'] = datetime.utcfromtimestamp(timestamp).replace(tzinfo=pytz.utc).strftime(DATE_FORMAT)
+        if data is not None and len(data) > 0:
+            payload['data'] = data
+        log.debug(json.dumps(payload))
+        return umsgpack.packb(payload)
 
 class FileType(object):
 
@@ -1224,7 +1223,7 @@ class EventProcessor(Thread):
             # pass-thru
             if not isinstance(snapshot, Snapshot):
                 log.warn("Unsupported snapshot, will pass-through: '{}'".format(snapshot))
-                self.uploader_socket.send(make_payload(data=snapshot))
+                self.uploader_socket.send(snapshot)
                 continue
             log_msg = 'Processing snapshot: {}'.format(snapshot)
             if len(snapshot.devices) > 0:
@@ -1465,10 +1464,10 @@ if __name__ == "__main__":
         # back to INFO logging
         log.setLevel(logging.INFO)
         while True:
-            uploader_socket.send(make_payload(data={
+            uploader_socket.send({
                         #TODO statistics
                         'device_info': device_info
-                    }))
+                    })
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, SystemExit):
         log.info('Stopping threads...')
