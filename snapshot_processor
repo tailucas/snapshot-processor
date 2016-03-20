@@ -4,6 +4,7 @@ import hashlib
 import logging
 import logging.handlers
 
+import copy
 import json
 import os
 import pytz
@@ -378,6 +379,68 @@ class Notifier(Thread):
         m = hashlib.md5()
         m.update(message)
         return m.hexdigest()
+
+
+class DeviceEvent(object):
+
+    def __init__(self, device_key, device_type, device_location=None):
+        self._device_key = device_key
+        self._device_type = device_type
+        self._device_location = device_location
+
+        self._timestamp = None
+        self._event_detail = None
+
+    @property
+    def device_key(self):
+        return self._device_key
+
+    @property
+    def device_type(self):
+        return self._device_type
+
+    @property
+    def device_location(self):
+        return self._device_location
+
+    @property
+    def timestamp(self):
+        return self._timestamp
+
+    @property.setter
+    def timestamp(self, value):
+        self._timestamp = value
+
+    @property
+    def event_detail(self):
+        return self._event_detail
+
+    @property.setter
+    def event_detail(self, value):
+        self._event_detail = value
+
+    @property
+    def dict(self):
+        representation = {
+            'device_key': self._device_key,
+            'device_type': self._device_type,
+        }
+        if self._device_location:
+            representation.update({
+                'device_location': self._device_location
+            })
+        if self._timestamp:
+            representation.update({
+                'timestamp': self._timestamp
+            })
+        if self._event_detail:
+            representation.update({
+                'event_detail': self._event_detail
+            })
+        return representation
+
+    def __str__(self):
+        return self._device_key
 
 
 class Snapshot(object):
@@ -788,7 +851,7 @@ class UploadEventHandler(FileSystemEventHandler):
     def __init__(self, fs_observer):
         super(UploadEventHandler, self).__init__()
         self.last_modified = None
-        self.image_dirs = dict()
+        self.device_events = dict()
 
         fs_observer.schedule(self, snapshot_root, recursive=True)
 
@@ -801,20 +864,25 @@ class UploadEventHandler(FileSystemEventHandler):
         self.event_processor_socket = zmq_context.socket(zmq.PUSH)
         self.event_processor_socket.connect(URL_WORKER_EVENT_PROCESSOR)
 
-    def add_image_dir(self, device_key, source_label, image_dir):
-        if image_dir in self.image_dirs:
-            raise RuntimeError('Image source label {} is already configured.'.format(source_label))
-        self.image_dirs[image_dir] = (device_key, source_label)
+    def add_image_dir(self, device_key, device_type, device_location, image_dir):
+        if image_dir in self.device_events:
+            raise RuntimeError('Image source label {} is already configured.'.format(device_location))
+        # create pre-canned device events for reuse later
+        self.device_events[image_dir] = DeviceEvent(
+            device_key=device_key,
+            device_type=device_type,
+            device_location=device_location
+        )
 
-    def _image_dir_details(self, event_directory):
-        for image_dir, image_dir_details in self.image_dirs.iteritems():
+    def _get_device_event(self, event_directory):
+        for image_dir, device_event in self.device_events.items():
             if image_dir in event_directory:
-                return image_dir_details
+                return copy.copy(device_event)
         return None
 
     @property
     def watched_dirs(self):
-        return self.image_dirs.values()
+        return self.device_events.keys()
 
     # we listen to on-modified events because the file is
     # created and then written to subsequently.
@@ -836,16 +904,17 @@ class UploadEventHandler(FileSystemEventHandler):
                 # noinspection PyBroadException
                 try:
                     # image snapshot?
-                    device_key, source_label = self._image_dir_details(snapshot_path)
-                    if source_label:
+                    device_event = self._get_device_event(snapshot_path)
+                    if device_event:
                         # create the snapshot data
                         snapshot = ImageSnapshot(
-                            source_label=source_label,
+                            source_label=device_event.device_location,
                             file_path=snapshot_path,
                             validity_seconds=snapshot_validity_seconds)
                         log.info('Snapshot: {} from {}'.format(snapshot, snapshot_path))
                         self.processor.send_pyobj(snapshot)
-                        self.event_processor_socket.send_pyobj(snapshot)
+                        device_event.timestamp = snapshot.timestamp
+                        self.event_processor_socket.send_pyobj(device_event)
                         # upload the image snapshot
                         self.cloud_storage_socket.send_pyobj((
                             snapshot_path,
@@ -857,12 +926,15 @@ class UploadEventHandler(FileSystemEventHandler):
 
 class LogTailer(Thread):
 
-    def __init__(self, device_key, log_label, log_path):
+    def __init__(self, device_key, device_type, device_location, log_label, log_path):
         super(LogTailer, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
 
         self.device_key = device_key
+        self.device_type = device_type
+        self.device_location = device_location
+
         self.log_label = log_label
         self.log_path = log_path
 
@@ -893,8 +965,8 @@ class LogTailer(Thread):
 
 class ApcEventTailer(LogTailer):
 
-    def __init__(self, device_key, log_label, log_path):
-        super(ApcEventTailer, self).__init__(device_key, log_label, log_path)
+    def __init__(self, device_key, device_type, device_location, log_label, log_path):
+        super(ApcEventTailer, self).__init__(device_key, device_type, device_location, log_label, log_path)
 
     def process_line(self, log_line):
         # skip this
@@ -905,18 +977,22 @@ class ApcEventTailer(LogTailer):
         timestamp = ' '.join(log_fields[:3])
         log_entry = ' '.join(log_fields[3:])
         log.debug('{} @ {}: {}'.format(self.log_label, timestamp, log_entry))
-        #FIXME
-        payload = dict()
         parsed_timestamp = dateutil.parser.parse(timestamp)
         log.debug('Parsed timestamp is {}'.format(parsed_timestamp))
         utc_timestamp = parsed_timestamp.astimezone(pytz.utc)
         log.debug('UTC timestamp is {}'.format(utc_timestamp))
         string_timestamp = utc_timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
         log.debug('UTC string timestamp is {}'.format(string_timestamp))
-        payload['timestamp'] = string_timestamp
-        log.debug('{} updated to {}'.format(timestamp, string_timestamp))
-        payload['data'] = {'samples': {log_entry: 1}}
-        return SampledSnapshot(payload, 60)
+        log.debug('{} translated to {}'.format(timestamp, string_timestamp))
+        # construct the device event
+        device_event = DeviceEvent(
+            device_key=self.device_key,
+            device_type=self.device_type,
+            device_location=self.device_location
+        )
+        device_event.timestamp = string_timestamp
+        device_event.event_detail = log_entry
+        return device_event
 
 
 class SampledSnapshotEventHandler(Thread):
@@ -1217,65 +1293,24 @@ class EventProcessor(Thread):
         self.uploader_socket.connect(URL_WORKER_UPLOADER)
         while True:
             try:
-                snapshot = self.socket.recv_pyobj()
+                event = self.socket.recv_pyobj()
             except ContextTerminated:
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
                 continue
-            # pass-thru
-            if not isinstance(snapshot, Snapshot):
-                log.warn("Unsupported snapshot, will pass-through: '{}'".format(snapshot))
-                self.uploader_socket.send_pyobj(snapshot)
+            # drop
+            if not isinstance(event, DeviceEvent):
+                log.warn("Unsupported event: '{}'".format(str(event)))
                 continue
-            log_msg = 'Processing snapshot: {}'.format(snapshot)
-            if len(snapshot.devices) > 0:
-                log.info(log_msg)
-            else:
-                log.debug(log_msg)
-            if snapshot.is_expired:
-                log.debug('Discarding expired snapshot {}'.format(snapshot))
+            log_msg = 'Processing device event: {}'.format(event)
+            try:
+                self.uploader_socket.send_pyobj(event)
+            except ContextTerminated:
+                break
+            except Exception:
+                log.exception(self.__class__.__name__)
                 continue
-            # only non-expired snapshots qualify as recent updates
-            # throw away expired devices
-            for device_name in self.active_devices.keys():
-                if datetime.utcnow().replace(tzinfo=pytz.utc) - self.active_devices[device_name] > timedelta(seconds=snapshot.validity_seconds):
-                    del self.active_devices[device_name]
-            # anything to process?
-            if len(snapshot.devices) == 0:
-                continue
-            # make a copy of the remaining, active devices
-            old_device_names = self.active_devices.keys()
-            # refresh the active devices
-            for device_name in snapshot.device_names:
-                self.active_devices[device_name] = snapshot.timestamp
-            # determine the new devices
-            new_device_names = list(set(self.active_devices.keys()) - set(old_device_names))
-            if len(self.active_devices) > 0 or len(new_device_names) > 0:
-                log.debug('{} active device(s) ({}), {} new ({}).'.format(
-                    len(self.active_devices),
-                    ','.join(self.active_devices.keys()),
-                    len(new_device_names),
-                    ','.join(new_device_names)))
-            last_notified = time.time() - self.last_notification
-            # notify if the notification interval has elapsed or if there are new devices
-            # and if the snapshot is newer than the last one for which a notification was sent
-            if (last_notified > notification_interval_seconds or len(new_device_names) > 0) \
-                    and self.latest_snapshot < snapshot.timestamp:
-                log.debug('Setting latest snapshot [{}] to [{}] from {} ({})'.format(
-                    self.latest_snapshot,
-                    snapshot.timestamp,
-                    snapshot.device_names,
-                    snapshot))
-                self.latest_snapshot = snapshot.timestamp
-                self.last_notification = time.time()
-                log.info('Sending notification for {}'.format(str(new_device_names)))
-                self.uploader_socket.send_pyobj(snapshot)
-            else:
-                log.debug("Not notifying yet, last notified: [{}], latest snapshot: [{}], current snapshot: [{}]".format(
-                    last_notified,
-                    self.latest_snapshot,
-                    snapshot.timestamp))
 
 
 def signal_handler(signum, frame):
@@ -1352,8 +1387,11 @@ if __name__ == "__main__":
         stream_handler = logging.StreamHandler(stream=sys.stdout)
         stream_handler.setFormatter(formatter)
         log.addHandler(stream_handler)
-    image_sources = dict()
-    ups_source = None
+    # file system listener
+    observer = Observer()
+    observer.name = observer.__class__.__name__
+    upload_event_handler = UploadEventHandler(fs_observer=observer)
+    log_tailer = None
     # construct the device representation
     input_types = dict(config.items('input_type'))
     input_locations = dict(config.items('input_location'))
@@ -1369,19 +1407,27 @@ if __name__ == "__main__":
             'device_key': device_key
         })
         if input_type.lower() == 'camera':
-            image_sources[device_key] = input_location
-        elif input_type.lower() == 'ups':
-            ups_source = device_key
+            upload_event_handler.add_image_dir(
+                device_key=device_key,
+                device_type=input_type,
+                device_location=input_location,
+                image_dir=os.path.join(config.get('snapshots', 'upload_dir'), input_location.lower()))
+        elif input_type.lower() == 'ups' and config.has_option('logged_events', 'apcupsd'):
+            log_tailer = ApcEventTailer(
+                device_key=device_key,
+                device_type=input_type,
+                device_location=input_location,
+                log_label='apcupsd',
+                log_path=config.get('logged_events', 'apcupsd'))
     device_info['outputs'] = list()
     for field, output_type in output_types.items():
         device_info['outputs'].append({
             'type': output_type,
         })
+    log.debug('Monitoring directories in {} for changes: {}'.format(
+        snapshot_root, str(upload_event_handler.watched_dirs)))
     # set up signal handlers
     signal.signal(signal.SIGHUP, signal_handler)
-    # file system listener
-    observer = Observer()
-    observer.name = observer.__class__.__name__
     # threads that we want to ensure are alive
     threads_tracked = Set()
     uploader = Uploader()
@@ -1414,25 +1460,6 @@ if __name__ == "__main__":
     google_drive_uploader = GoogleDriveUploader(
         gauth_creds_file=config.get('gdrive', 'creds_file'),
         gdrive_folder=config.get('gdrive', 'folder'))
-    upload_event_handler = UploadEventHandler(fs_observer=observer)
-    # monitor these directories
-    for device_key, image_source in image_sources.items():
-        upload_event_handler.add_image_dir(
-            device_key=device_key,
-            source_label=image_source,
-            image_dir=os.path.join(config.get('snapshots', 'upload_dir'), image_source.lower()))
-    log.debug('Monitoring directories in {} for changes: {}'.format(
-        snapshot_root, str(upload_event_handler.watched_dirs)))
-    # log tailer
-    if config.has_option('logged_events', 'apcupsd'):
-        if ups_source is None:
-            raise RuntimeError('apcupsd log is configured without UPS source.')
-        log_tailer = ApcEventTailer(
-            device_key=ups_source,
-            log_label='apcupsd',
-            log_path=config.get('logged_events', 'apcupsd'))
-        log_tailer.start()
-        threads_tracked.add(log_tailer.getName())
     # start threads
     notifier.start()
     threads_tracked.add(notifier.getName())
@@ -1449,6 +1476,9 @@ if __name__ == "__main__":
     threads_tracked.add(detector_event_handler.getName())
     observer.start()
     threads_tracked.add(observer.getName())
+    if log_tailer:
+        log_tailer.start()
+        threads_tracked.add(log_tailer.getName())
     # start the Google Driver archiver last
     google_drive_archiver.start()
     threads_tracked.add(google_drive_archiver.getName())
