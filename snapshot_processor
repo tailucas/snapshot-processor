@@ -556,7 +556,7 @@ class CloudStorage(object):
         return NotImplemented
 
 
-class GoogleDriveManager(CloudStorage):
+class GoogleDriveManager(Thread, CloudStorage):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
         super(GoogleDriveManager, self).__init__()
@@ -630,7 +630,7 @@ class GoogleDriveManager(CloudStorage):
         return folder_id, folder_link
 
 
-class GoogleDriveArchiver(Thread, GoogleDriveManager):
+class GoogleDriveArchiver(GoogleDriveManager):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
         super(GoogleDriveArchiver, self).__init__(
@@ -721,7 +721,7 @@ class GoogleDriveArchiver(Thread, GoogleDriveManager):
         return False
 
 
-class GoogleDriveUploader(Thread, GoogleDriveManager):
+class GoogleDriveUploader(GoogleDriveManager):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
         super(GoogleDriveUploader, self).__init__(
