@@ -129,6 +129,7 @@ class Uploader(Thread):
         log.debug(json.dumps(payload))
         return umsgpack.packb(payload)
 
+
 class FileType(object):
 
     def __init__(self):
@@ -146,6 +147,7 @@ class FileType(object):
             # return the specific file type
             return mime_type.split('/')[1]
         return None
+
 
 filetype = None
 
@@ -1209,6 +1211,7 @@ class EventProcessor(Thread):
         self.active_devices = dict()
         self.latest_event = datetime.utcnow().replace(tzinfo=pytz.utc)
         self.last_notification = 0
+        self.latest_snapshot = time.time()
 
     def run(self):
         self.uploader_socket.connect(URL_WORKER_UPLOADER)
