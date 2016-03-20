@@ -1223,7 +1223,7 @@ class EventProcessor(Thread):
             # pass-thru
             if not isinstance(snapshot, Snapshot):
                 log.warn("Unsupported snapshot, will pass-through: '{}'".format(snapshot))
-                self.uploader_socket.send(snapshot)
+                self.uploader_socket.send_pyobj(snapshot)
                 continue
             log_msg = 'Processing snapshot: {}'.format(snapshot)
             if len(snapshot.devices) > 0:
@@ -1464,7 +1464,7 @@ if __name__ == "__main__":
         # back to INFO logging
         log.setLevel(logging.INFO)
         while True:
-            uploader_socket.send({
+            uploader_socket.send_pyobj({
                         #TODO statistics
                         'device_info': device_info
                     })
