@@ -1254,7 +1254,7 @@ class SnapshotProcessor(Thread):
                                 log.info('Send SMS {} ({}) {} characters: {}'.format(name, recipient, len(message), message))
                                 self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
                     #FIXME
-                    if device_name in ['Patio Motion Detector', 'Back Yard Motion Detector', 'Pool Motion Detector', 'Kitchen Door Motion Detector']:
+                    if 'Patio Motion Detector' in device_name or 'Back Yard Motion Detector' in device_name or 'Pool Motion Detector' in device_name or 'Kitchen Door Motion Detector' in device_name:
                         if SnapshotProcessor._notification_ctrl:
                             self.notifier.send_pyobj(TTSNotification(message=device_name))
                     else:
@@ -1266,7 +1266,7 @@ class SnapshotProcessor(Thread):
                             self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
                     #FIXME
                     if SnapshotProcessor._relay_ctrl:
-                        if device_name in ['Patio Motion Detector', 'Back Yard Motion Detector', 'Pool Motion Detector', 'Kitchen Door Motion Detector']:
+                        if 'Patio Motion Detector' in device_name or 'Back Yard Motion Detector' in device_name or 'Pool Motion Detector' in device_name or 'Kitchen Door Motion Detector' in device_name:
                             relays = 1
                             relay_activations = dict()
                             for i in range(1, relays+1):
