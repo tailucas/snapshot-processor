@@ -445,14 +445,11 @@ class DeviceEvent(object):
         representation = {
             'device_key': self._device_key,
             'device_type': self._device_type,
+            'timestamp': self.timestamp_string
         }
         if self._device_location:
             representation.update({
                 'device_location': self._device_location
-            })
-        if self._timestamp:
-            representation.update({
-                'timestamp': self._timestamp
             })
         if self._event_detail:
             representation.update({
@@ -565,68 +562,6 @@ class SampledSnapshot(Snapshot):
         string = 'At {}'.format(self.timestamp.strftime('%X %x %Z'))
         if self.source_label:
             string = '{} at {}'.format(self.source_label, self.timestamp.strftime('%X %x %Z'))
-        if self.devices:
-            return string + ': {} devices: {}'.format(
-                len(self.devices), ','.join(self.devices.keys()))
-        return string
-
-
-class ImageSnapshot(Snapshot):
-
-    def __init__(self, source_label, file_path, validity_seconds):
-        super(ImageSnapshot, self).__init__(validity_seconds=validity_seconds)
-        # default timestamp data to 'now'
-        self.source_label = source_label
-        self.timestamp_data = datetime.utcnow().replace(tzinfo=pytz.utc)
-        try:
-            file_base_name = os.path.splitext(os.path.basename(file_path))[0]
-            if '_' in file_base_name:
-                date_string = file_base_name.split('_')[1]
-            else:
-                date_string = file_base_name
-            self.timestamp_data = dateutil.parser.parse(date_string)
-            if self.timestamp_data.tzinfo is None:
-                # we use the default specific to the physical locality of the devices
-                self.timestamp_data = self.timestamp_data.replace(tzinfo=tz.tzlocal())
-            log.debug('Parsed timestamp data from {}: {}'.format(file_base_name, str(self.timestamp_data)))
-        except ValueError:
-            log.exception("Cannot parse date-like string {}. Defaulting to 'now'.".format(date_string))
-        self.devices_data = {'camera': None}
-
-    @property
-    def timestamp(self):
-        return self.timestamp_data
-
-    @property
-    def is_expired(self):
-        now = datetime.utcnow().replace(tzinfo=pytz.utc)
-        return now - self.timestamp_data > timedelta(seconds=self.validity_seconds)
-
-    @property
-    def data(self):
-        return None
-
-    @property
-    def device_names(self):
-        if self.devices_data is None:
-            return None
-        names = list()
-        for device_name in self.devices_data.keys():
-            names.append(' '.join([self.source_label, device_name]))
-        return names
-
-    @property
-    def devices(self):
-        if self.devices_data is None:
-            return {}
-        return self.devices_data
-
-    @property
-    def source(self):
-        return self.source_label
-
-    def __str__(self):
-        string = '{} at {}'.format(self.source_label, self.timestamp.strftime('%X %x %Z'))
         if self.devices:
             return string + ': {} devices: {}'.format(
                 len(self.devices), ','.join(self.devices.keys()))
@@ -1262,11 +1197,6 @@ class SnapshotProcessor(Thread):
                             self.notifier.send_pyobj(TTSNotification(message=device_name))
                     else:
                         self.notifier.send_pyobj(TTSNotification(message=device_name))
-                    if isinstance(snapshot, ImageSnapshot):
-                        for name, recipient in sms_owners.items():
-                            message = '{}: {}'.format(snapshot, cloud_storage.cloud_storage_url)
-                            log.info('Send SMS {} ({}) {} characters: {}'.format(name, recipient, len(message), message))
-                            self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
                     #FIXME
                     if SnapshotProcessor._relay_ctrl:
                         if 'Patio Motion Detector' in device_name or 'Back Yard Motion Detector' in device_name or 'Pool Motion Detector' in device_name or 'Kitchen Door Motion Detector' in device_name:
