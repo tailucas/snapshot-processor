@@ -105,7 +105,7 @@ class Uploader(Thread):
                 # drop
                 if isinstance(event, DeviceEvent):
                     timestamp = event.timestamp_string
-                    event_data = event.dict
+                    event_data = {'active_devices': [event.dict]}
                 else:
                     event_data = event
                 publisher.send(Uploader.make_payload(timestamp, event_data))
