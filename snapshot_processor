@@ -77,7 +77,6 @@ zmq_context = zmq.Context()
 URL_WORKER_NOTIFIER = 'inproc://notifier'
 URL_WORKER_UPLOADER = 'inproc://uploader'
 URL_WORKER_SNAPSHOT_PROCESSOR = 'inproc://snapshot-processor'
-URL_WORKER_EVENT_PROCESSOR = 'inproc://event-processor'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 
@@ -100,19 +99,13 @@ class Uploader(Thread):
         publisher.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
                                                   port=config.get('zmq', 'pubsub_port')))
         while True:
-            event = None
-            timestamp = None
             try:
                 event = self.inproc_pull.recv_pyobj()
-            except ContextTerminated:
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                continue
-            if isinstance(event, Snapshot):
-                timestamp = event.timestamp
-            try:
-                publisher.send(Uploader.make_payload(timestamp, event))
+                # drop
+                if not isinstance(event, DeviceEvent):
+                    log.warn("Unsupported event: '{}'".format(str(event)))
+                    continue
+                publisher.send(Uploader.make_payload(event.timestamp_string, event.dict))
             except ContextTerminated:
                 break
             except Exception:
@@ -123,8 +116,8 @@ class Uploader(Thread):
     def make_payload(timestamp=None, data=None):
         payload = dict()
         if timestamp is None:
-            timestamp = time.time()
-        payload['timestamp'] = datetime.utcfromtimestamp(timestamp).replace(tzinfo=pytz.utc).strftime(DATE_FORMAT)
+            timestamp = datetime.utcfromtimestamp(time.time()).replace(tzinfo=pytz.utc).strftime(DATE_FORMAT)
+        payload['timestamp'] = timestamp
         if data is not None and len(data) > 0:
             payload['data'] = data
         log.debug(json.dumps(payload))
@@ -405,11 +398,36 @@ class DeviceEvent(object):
 
     @property
     def timestamp(self):
+        if self._timestamp is None:
+            self._timestamp = datetime.utcnow().replace(tzinfo=pytz.utc)
         return self._timestamp
 
     @property.setter
     def timestamp(self, value):
-        self._timestamp = value
+        if isinstance(value, basestring):
+            try:
+                self._timestamp = dateutil.parser.parse(value)
+                log.debug('Parsed timestamp is {}'.format(self._timestamp))
+            except ValueError:
+                log.exception("Cannot parse date-like string {}. Defaulting to '{}'.".format(value, self.timestamp))
+                return
+        elif isinstance(value, datetime):
+            self._timestamp = value
+        else:
+            raise RuntimeError("Unknown date/time type: '{}'".format(value))
+        # ensure that some timezone information is present
+        if self._timestamp.tzinfo is None:
+            use_tz = tz.tzlocal()
+            log.debug('{}: setting to local time {}'.format(self._timestamp, use_tz))
+            # we use the default specific to the physical locality of the devices
+            self._timestamp = self._timestamp.replace(tzinfo=use_tz)
+        # now normalize to UTC
+        log.debug('{}: setting to UTC from {}'.format(self._timestamp, self._timestamp.tzinfo))
+        self._timestamp = self._timestamp.astimezone(pytz.utc)
+
+    @property
+    def timestamp_string(self):
+        return self.timestamp.strftime(DATE_FORMAT)
 
     @property
     def event_detail(self):
@@ -855,14 +873,11 @@ class UploadEventHandler(FileSystemEventHandler):
 
         fs_observer.schedule(self, snapshot_root, recursive=True)
 
-        self.processor = zmq_context.socket(zmq.PUSH)
-        self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
-
         self.cloud_storage_socket = zmq_context.socket(zmq.PUSH)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
-        self.event_processor_socket = zmq_context.socket(zmq.PUSH)
-        self.event_processor_socket.connect(URL_WORKER_EVENT_PROCESSOR)
+        self.uploader = zmq_context.socket(zmq.PUSH)
+        self.uploader.connect(URL_WORKER_UPLOADER)
 
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
@@ -903,23 +918,24 @@ class UploadEventHandler(FileSystemEventHandler):
             if snapshot_path.startswith(snapshot_root):
                 # noinspection PyBroadException
                 try:
-                    # image snapshot?
+                    # image snapshot that can be mapped to a device?
                     device_event = self._get_device_event(snapshot_path)
                     if device_event:
-                        # create the snapshot data
-                        snapshot = ImageSnapshot(
-                            source_label=device_event.device_location,
-                            file_path=snapshot_path,
-                            validity_seconds=snapshot_validity_seconds)
-                        log.info('Snapshot: {} from {}'.format(snapshot, snapshot_path))
-                        self.processor.send_pyobj(snapshot)
-                        device_event.timestamp = snapshot.timestamp
-                        self.event_processor_socket.send_pyobj(device_event)
+                        log.info('{} from {}'.format(device_event, snapshot_path))
+                        file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
+                        if '_' in file_base_name:
+                            date_string = file_base_name.split('_')[1]
+                        else:
+                            date_string = file_base_name
+                        device_event.timestamp = date_string
+                        self.uploader.send_pyobj(device_event)
                         # upload the image snapshot
                         self.cloud_storage_socket.send_pyobj((
                             snapshot_path,
-                            snapshot.timestamp
+                            device_event.timestamp
                         ))
+                    else:
+                        log.warn("Ignored unmapped path event: {}".format(snapshot_path))
                 except Exception:
                     log.exception('Cannot process {}'.format(snapshot_path))
 
@@ -948,13 +964,13 @@ class LogTailer(Thread):
 
     def run(self):
         log.info('Tailing log {} as {}'.format(self.log_path, self.log_label))
-        self.event_processor_socket.connect(URL_WORKER_EVENT_PROCESSOR)
+        self.uploader.connect(URL_WORKER_UPLOADER)
         while True:
             try:
                 for line in Pygtail(self.log_path):
                     notification = self.process_line(line)
                     if notification:
-                        self.event_processor_socket.send_pyobj(notification)
+                        self.uploader.send_pyobj(notification)
             except Exception:
                 log.exception(self.log_path)
 
@@ -977,20 +993,13 @@ class ApcEventTailer(LogTailer):
         timestamp = ' '.join(log_fields[:3])
         log_entry = ' '.join(log_fields[3:])
         log.debug('{} @ {}: {}'.format(self.log_label, timestamp, log_entry))
-        parsed_timestamp = dateutil.parser.parse(timestamp)
-        log.debug('Parsed timestamp is {}'.format(parsed_timestamp))
-        utc_timestamp = parsed_timestamp.astimezone(pytz.utc)
-        log.debug('UTC timestamp is {}'.format(utc_timestamp))
-        string_timestamp = utc_timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
-        log.debug('UTC string timestamp is {}'.format(string_timestamp))
-        log.debug('{} translated to {}'.format(timestamp, string_timestamp))
         # construct the device event
         device_event = DeviceEvent(
             device_key=self.device_key,
             device_type=self.device_type,
             device_location=self.device_location
         )
-        device_event.timestamp = string_timestamp
+        device_event.timestamp = timestamp
         device_event.event_detail = log_entry
         return device_event
 
@@ -1273,34 +1282,6 @@ class SnapshotProcessor(Thread):
                     snapshot.timestamp))
 
 
-class EventProcessor(Thread):
-
-    def __init__(self):
-        super(EventProcessor, self).__init__(name=self.__class__.__name__)
-        self.daemon = True
-
-        self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.bind(URL_WORKER_EVENT_PROCESSOR)
-        self.uploader_socket = zmq_context.socket(zmq.PUSH)
-
-    def run(self):
-        self.uploader_socket.connect(URL_WORKER_UPLOADER)
-        while True:
-            try:
-                event = self.socket.recv_pyobj()
-                # drop
-                if not isinstance(event, DeviceEvent):
-                    log.warn("Unsupported event: '{}'".format(str(event)))
-                    continue
-                log.debug('Processing device event: {}'.format(event))
-                self.uploader_socket.send_pyobj(event)
-            except ContextTerminated:
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                continue
-
-
 def signal_handler(signum, frame):
     log.warn('Signal {} received.'.format(signum))
     log.setLevel(logging.DEBUG)
@@ -1414,8 +1395,6 @@ if __name__ == "__main__":
         })
     log.debug('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
-    # set up signal handlers
-    signal.signal(signal.SIGHUP, signal_handler)
     # threads that we want to ensure are alive
     threads_tracked = Set()
     uploader = Uploader()
@@ -1436,7 +1415,6 @@ if __name__ == "__main__":
         raise RuntimeError('Unknown SMS method specified: {}'.format(sms_method))
     # application threads
     notifier = Notifier(sms_provider=sms_provider)
-    event_processor = EventProcessor()
     snapshot_processor = SnapshotProcessor()
     # sampled snapshot processing
     sample_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'sample_publisher'))
@@ -1451,8 +1429,6 @@ if __name__ == "__main__":
     # start threads
     notifier.start()
     threads_tracked.add(notifier.getName())
-    event_processor.start()
-    threads_tracked.add(event_processor.getName())
     snapshot_processor.start()
     threads_tracked.add(snapshot_processor.getName())
     # start the collectors
@@ -1480,6 +1456,8 @@ if __name__ == "__main__":
     f.start()
     uploader_socket = zmq_context.socket(zmq.PUSH)
     uploader_socket.connect(URL_WORKER_UPLOADER)
+    # set up signal handlers
+    signal.signal(signal.SIGHUP, signal_handler)
     try:
         # startup completed
         # back to INFO logging
