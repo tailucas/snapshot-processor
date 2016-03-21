@@ -101,11 +101,14 @@ class Uploader(Thread):
         while True:
             try:
                 event = self.inproc_pull.recv_pyobj()
+                timestamp = None
                 # drop
-                if not isinstance(event, DeviceEvent):
-                    log.warn("Unsupported event: '{}'".format(str(event)))
-                    continue
-                publisher.send(Uploader.make_payload(event.timestamp_string, event.dict))
+                if isinstance(event, DeviceEvent):
+                    timestamp = event.timestamp_string
+                    event_data = event.dict
+                else:
+                    event_data = event
+                publisher.send(Uploader.make_payload(timestamp, event_data))
             except ContextTerminated:
                 break
             except Exception:
