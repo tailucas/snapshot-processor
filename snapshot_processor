@@ -402,7 +402,7 @@ class DeviceEvent(object):
             self._timestamp = datetime.utcnow().replace(tzinfo=pytz.utc)
         return self._timestamp
 
-    @property.setter
+    @timestamp.setter
     def timestamp(self, value):
         if isinstance(value, basestring):
             try:
@@ -433,7 +433,7 @@ class DeviceEvent(object):
     def event_detail(self):
         return self._event_detail
 
-    @property.setter
+    @event_detail.setter
     def event_detail(self, value):
         self._event_detail = value
 
@@ -960,7 +960,7 @@ class LogTailer(Thread):
         if 'syslog' in self.log_file:
             raise RuntimeError('Tailing syslog will result in log feedback.')
 
-        self.event_processor_socket = zmq_context.socket(zmq.PUSH)
+        self.uploader = zmq_context.socket(zmq.PUSH)
 
     def run(self):
         log.info('Tailing log {} as {}'.format(self.log_path, self.log_label))
