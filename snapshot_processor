@@ -1325,6 +1325,7 @@ if __name__ == "__main__":
     for field, output_type in output_types.items():
         device_info['outputs'].append({
             'type': output_type,
+            'device_key': output_type
         })
     log.debug('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
