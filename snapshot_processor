@@ -153,7 +153,38 @@ class DeviceActivator(Thread):
         while True:
             try:
                 event = umsgpack.unpackb(self.listener.recv())
-                log.info('Device activator event: {}'.format(event))
+                if 'data' not in event:
+                    log.warn('Unknown event data: {}'.format(event))
+                    continue
+                event_data = event['data']
+                if 'trigger_output' in event_data:
+                    output_type = event_data['trigger_output']['type']
+                    if 'input_context' not in event_data:
+                        log.warn('{} requested without context, ignoring.'.format(output_type))
+                        continue
+                    device_label = event_data['input_context']['device_label']
+                    event_detail = ""
+                    if 'event_detail' in event_data['input_context']:
+                        event_detail = '. {}'.format(event_data['input_context']['event_detail'])
+                    notification_message = '{}{}'.format(device_label, event_detail)
+                    if output_type.lower() == 'tts':
+                        self.notifier.send_pyobj(TTSNotification(message=notification_message))
+                    elif output_type.lower() == 'sms':
+                        if 'device_params' not in event_data['trigger_output']:
+                            log.error('Parameters must be configured for output type {}'.format(output_type))
+                            continue
+                        recipients = event_data['trigger_output']['device_params'].strip().split(',')
+                        for recipient in recipients:
+                            name_number = recipient.split(';')
+                            log.info("SMS {} ({}) '{}'".format(name_number[0], name_number[1], notification_message))
+                            self.notifier.send_pyobj(SMSNotification(
+                                message=notification_message,
+                                recipient=name_number[1],
+                                sender=None,
+                                flash=True))
+                    else:
+                        log.error('Unconfigured output type {} for input context {}'.format(output_type, event_data))
+                        continue
             except ContextTerminated:
                 break
             except Exception:
