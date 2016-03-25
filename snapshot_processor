@@ -168,6 +168,7 @@ class DeviceActivator(Thread):
                         event_detail = '. {}'.format(event_data['input_context']['event_detail'])
                     notification_message = '{}{}'.format(device_label, event_detail)
                     if output_type.lower() == 'tts':
+                        log.info("TTS '{}'".format(notification_message))
                         self.notifier.send_pyobj(TTSNotification(message=notification_message))
                     elif output_type.lower() == 'sms':
                         if 'device_params' not in event_data['trigger_output']:
