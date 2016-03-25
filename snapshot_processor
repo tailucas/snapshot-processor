@@ -1411,6 +1411,10 @@ if __name__ == "__main__":
     if log_tailer:
         log_tailer.start()
         threads_tracked.add(log_tailer.getName())
+    # finish with the device activator
+    device_activator = DeviceActivator()
+    device_activator.start()
+    threads_tracked.add(device_activator.getName())
     # start the Google Driver archiver last
     google_drive_archiver.start()
     threads_tracked.add(google_drive_archiver.getName())
