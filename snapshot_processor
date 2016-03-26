@@ -1417,8 +1417,8 @@ if __name__ == "__main__":
     notifier = Notifier(sms_provider=sms_provider)
     snapshot_processor = SnapshotProcessor()
     # sampled snapshot processing
-    sample_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'sample_publisher'))
-    detector_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'detector_publisher'))
+    #sample_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'sample_publisher'))
+    #detector_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'detector_publisher'))
     # ensure that auth is properly set up first
     google_drive_archiver = GoogleDriveArchiver(
         gauth_creds_file=config.get('gdrive', 'creds_file'),
@@ -1434,10 +1434,10 @@ if __name__ == "__main__":
     # start the collectors
     google_drive_uploader.start()
     threads_tracked.add(google_drive_uploader.getName())
-    sample_event_handler.start()
-    threads_tracked.add(sample_event_handler.getName())
-    detector_event_handler.start()
-    threads_tracked.add(detector_event_handler.getName())
+    #sample_event_handler.start()
+    #threads_tracked.add(sample_event_handler.getName())
+    #detector_event_handler.start()
+    #threads_tracked.add(detector_event_handler.getName())
     observer.start()
     threads_tracked.add(observer.getName())
     if log_tailer:
