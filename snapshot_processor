@@ -956,11 +956,12 @@ class ClickatellSMSProvider(SMSProvider):
             log.exception('Cannot SMS {}: {}'.format(recipient, message))
 
 
-signal = 0
+signal_value = 0
 
 
 def signal_handler(signum, frame):
     log.warn('Signal {} received.'.format(signum))
+    signal_value = signum
     if signum == signal.SIGHUP:
         if log.getEffectiveLevel() == logging.INFO:
             log.setLevel(logging.DEBUG)
@@ -973,7 +974,7 @@ def signal_handler(signum, frame):
 def thread_nanny(threads_tracked):
     while True:
         # kill the nanny now
-        if signal == signal.SIGTERM:
+        if signal_value == signal.SIGTERM:
             break
         threads_alive = Set()
         for thread_info in threading.enumerate():
@@ -1110,6 +1111,6 @@ if __name__ == "__main__":
     finally:
         log.info('Removing PID file {}'.format(pidfile))
         os.unlink(pidfile)
-    log.info('Exiting with code {}'.format(signal))
+    log.info('Exiting with code {}'.format(signal_value))
     # exit using the signal, if any
-    sys.exit(signal)
+    sys.exit(signal_value)
