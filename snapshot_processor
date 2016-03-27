@@ -118,6 +118,8 @@ class Uploader(Thread):
                     event_data = event
                 publisher.send(Uploader.make_payload(timestamp, event_data))
             except ContextTerminated:
+                self.inproc_pull.close()
+                publisher.close()
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
@@ -188,6 +190,8 @@ class DeviceActivator(Thread):
                         log.error('Unconfigured output type {} for input context {}'.format(output_type, event_data))
                         continue
             except ContextTerminated:
+                self.listener.close()
+                self.notifier.close()
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
@@ -279,6 +283,7 @@ class Notifier(Thread):
             try:
                 notification = self.socket.recv_pyobj()
             except ContextTerminated:
+                self.socket.close()
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
@@ -643,6 +648,7 @@ class GoogleDriveUploader(GoogleDriveManager):
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
                 self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
             except ContextTerminated:
+                self.socket.close()
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
@@ -750,12 +756,17 @@ class UploadEventHandler(FileSystemEventHandler):
                         else:
                             date_string = file_base_name
                         device_event.timestamp = date_string
-                        self.uploader.send_pyobj(device_event)
-                        # upload the image snapshot
-                        self.cloud_storage_socket.send_pyobj((
-                            snapshot_path,
-                            device_event.timestamp
-                        ))
+                        try:
+                            self.uploader.send_pyobj(device_event)
+                            # upload the image snapshot
+                            self.cloud_storage_socket.send_pyobj((
+                                snapshot_path,
+                                device_event.timestamp
+                            ))
+                        except ContextTerminated:
+                            self.uploader.close()
+                            self.cloud_storage_socket.close()
+                            return
                     else:
                         log.warn("Ignored unmapped path event: {}".format(snapshot_path))
                 except Exception:
@@ -793,6 +804,9 @@ class LogTailer(Thread):
                     notification = self.process_line(line)
                     if notification:
                         self.uploader.send_pyobj(notification)
+            except ContextTerminated:
+                self.uploader.close()
+                break
             except Exception:
                 log.exception(self.log_path)
 
@@ -932,7 +946,11 @@ class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
                         pass
             elif self.error_path in event.src_path:
                 log.warn('SMS error at {}'.format(event.src_path))
-                self.notifier.send_pyobj(TTSNotification(message="SMS fault!"))
+                try:
+                    self.notifier.send_pyobj(TTSNotification(message="SMS fault!"))
+                except ContextTerminated:
+                    self.notifier.close()
+                    return
             else:
                 log.warn('Unsupported SMS event path: {}'.format(event.src_path))
                 # some other path that is unsupported
@@ -1102,10 +1120,13 @@ if __name__ == "__main__":
         # back to INFO logging
         log.setLevel(logging.INFO)
         while True:
-            uploader_socket.send_pyobj({
-                        #TODO statistics
-                        'device_info': device_info
-                    })
+            try:
+                uploader_socket.send_pyobj({
+                            #TODO statistics
+                            'device_info': device_info
+                        })
+            except ContextTerminated:
+                uploader_socket.close()
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, SystemExit):
         log.info('Stopping threads...')
