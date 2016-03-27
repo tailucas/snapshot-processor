@@ -1135,10 +1135,7 @@ if __name__ == "__main__":
     finally:
         log.info('Removing PID file {}'.format(pidfile))
         os.unlink(pidfile)
-    # exit with the code of the signal, except for INT (=> exit 0)
-    # which is useful to kill off the app and avoid supervisord
-    # resurrecting the process
-    if signal_handler.last_signal != signal.SIGINT:
-        log.info('Exiting with code {}'.format(signal_handler.last_signal))
-        # exit using the signal, if any
-        sys.exit(signal_handler.last_signal)
+
+    log.info('Exiting with code {}'.format(signal_handler.last_signal))
+    # exit using the signal, if any
+    sys.exit(signal_handler.last_signal)
