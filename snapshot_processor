@@ -1120,23 +1120,25 @@ if __name__ == "__main__":
         # back to INFO logging
         log.setLevel(logging.INFO)
         while True:
-            try:
-                uploader_socket.send_pyobj({
-                            #TODO statistics
-                            'device_info': device_info
-                        })
-            except ContextTerminated:
-                uploader_socket.close()
+            uploader_socket.send_pyobj({
+                        #TODO statistics
+                        'device_info': device_info
+                    })
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
-    except(KeyboardInterrupt, SystemExit):
-        log.info('Stopping threads...')
+    except(KeyboardInterrupt, SystemExit, ContextTerminated):
         observer.stop()
         observer.join()
+        # since this thread and the signal handler are one and the same
+        uploader_socket.close()
         log.info('Closing messaging...')
         zmq_context.term()
     finally:
         log.info('Removing PID file {}'.format(pidfile))
         os.unlink(pidfile)
-    log.info('Exiting with code {}'.format(signal_handler.last_signal))
-    # exit using the signal, if any
-    sys.exit(signal_handler.last_signal)
+    # exit with the code of the signal, except for INT (=> exit 0)
+    # which is useful to kill off the app and avoid supervisord
+    # resurrecting the process
+    if signal_handler.last_signal != signal.SIGINT:
+        log.info('Exiting with code {}'.format(signal_handler.last_signal))
+        # exit using the signal, if any
+        sys.exit(signal_handler.last_signal)
