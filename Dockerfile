@@ -43,8 +43,8 @@ RUN pip install -r /tmp/pip_freeze
 # show outdated packages since the freeze
 RUN pip list --outdated
 
-# ftp, ssh, http, zmq
-EXPOSE 21 22 5000 5556 5558
+# ftp, ssh, zmq
+EXPOSE 21 22 5556 5558
 
 # sshd configuration
 RUN mkdir /var/run/sshd

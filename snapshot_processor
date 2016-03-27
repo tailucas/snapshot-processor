@@ -42,7 +42,6 @@ from urllib import pathname2url
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated
-from flask import Flask, request, render_template, url_for, redirect
 
 # unbuffered STDOUT for print
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
@@ -69,21 +68,12 @@ config.optionxform = str
 config.read([os.path.join(DIR, '{}.conf'.format(APP))])
 
 snapshot_root = config.get('snapshots', 'root_dir')
-heartbeat_interval_seconds = int(config.get('snapshots', 'heartbeat_interval_seconds'))
-notification_interval_seconds = int(config.get('snapshots', 'notification_interval_seconds'))
-snapshot_validity_seconds = int(config.get('snapshots', 'snapshot_validity_seconds'))
-
-sms_recipient_names = config.get('sms', 'recipient_names').split(',')
-sms_recipient_numbers = config.get('sms', 'recipient_numbers').split(',')
-sms_owners = dict(zip(sms_recipient_names, sms_recipient_numbers))
 
 cloud_storage = None
 
-rest_api = Flask(APP)
 zmq_context = zmq.Context()
 URL_WORKER_NOTIFIER = 'inproc://notifier'
 URL_WORKER_UPLOADER = 'inproc://uploader'
-URL_WORKER_SNAPSHOT_PROCESSOR = 'inproc://snapshot-processor'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 
@@ -227,13 +217,8 @@ class Notification(object):
 
 class TTSNotification(Notification):
 
-    def __init__(self, message, informational=False):
+    def __init__(self, message):
         super(TTSNotification, self).__init__(message=message)
-        self.informational = informational
-
-    @property
-    def is_informational(self):
-        return self.informational
 
 
 class SMSNotification(Notification):
@@ -256,16 +241,13 @@ class Notifier(Thread):
     def __init__(self, sms_provider):
         super(Notifier, self).__init__(name=self.__class__.__name__)
         self.daemon = True
-
+        # audio player wrapper
         self.player = None
-
+        # SMS notification provider
         self.sms_provider = sms_provider
 
         self.socket = zmq_context.socket(zmq.PULL)
         self.socket.bind(URL_WORKER_NOTIFIER)
-
-        self.notification_timer = None
-        self.deferred_notifications = Queue()
 
         self.tts_default_sound_file = config.get('app', 'tts_default_sound')
         with open(config.get('ibm', 'tts_creds')) as config_file:
@@ -277,23 +259,10 @@ class Notifier(Thread):
         self.tts_auth = (tts_api_cfg['credentials']['username'],
                          tts_api_cfg['credentials']['password'])
 
-        not_before = config.get('informational_notifications', 'not_before')
-        if not_before:
-            self.informational_not_before = dateutil.parser.parse(not_before)
-        not_after = config.get('informational_notifications', 'not_after')
-        if not_after:
-            self.informational_not_after = dateutil.parser.parse(not_after)
-        self.any_time = False
-        if not_before is None or not_after is None:
-            self.any_time = True
-        else:
-            log.info('Informational notifications after {} will be deferred until {}.'.format(
-                not_after,
-                not_before))
-
     def run(self):
         # black-holing STDOUT causes properties to not work
         self.player = Player(stderr=open('/dev/null', 'w'), autospawn=True)
+        self.play_file(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
         while True:
             notification = None
             try:
@@ -377,61 +346,6 @@ class Notifier(Thread):
             self.play_file(tts_path)
         else:
             raise StandardError('No file {} to play "{}"'.format(tts_path, message))
-
-    def drain_deferred_notifications(self):
-        # cancel the timer in case we're signalled instead
-        self.notification_timer.cancel()
-        log.info('Draining {} notifications deferred until now.'.format(self.deferred_notifications.qsize()))
-        while not self.deferred_notifications.empty():
-            try:
-                pass
-                #TODO: fix
-                #self.notification_queue.put(self.deferred_notifications.get())
-            except Exception as e:
-                log.error(e)
-            else:
-                self.deferred_notifications.task_done()
-        # Delete the expired the timer
-        self.notification_timer = None
-
-    def notify_voice(self, message, informational=False):
-        #TODO: remove
-        informational=False
-        if not informational or self.any_time:
-            self.notification_queue.put(message)
-        else:
-            # make a future date that is relative (after) now time.
-            now = datetime.now().replace(tzinfo=tz.tzlocal())
-            not_before = now.replace(
-                hour=self.informational_not_before.hour,
-                minute=self.informational_not_before.minute,
-                second=0,
-                microsecond=0)
-            not_after = now.replace(
-                hour=self.informational_not_after.hour,
-                minute=self.informational_not_after.minute,
-                second=0,
-                microsecond=0)
-            log.debug("Comparing now {} with 'not_after' of {}".format(now, not_after))
-            if now < not_after:
-                # go ahead
-                log.debug('No notification deferral necessary.')
-                self.notification_queue.put(message)
-                return
-            elif now >= not_after:
-                # the not-before time may not be on the same day
-                if now > not_before:
-                    defer_until = not_before + timedelta(days=1)
-            else:
-                defer_until = not_before
-            # defer the notification
-            log.info("Deferring informational notification '{}' until {}".format(message, defer_until))
-            self.deferred_notifications.put(message)
-            if self.notification_timer is None:
-                # now calculate the sleep time based on the deferral
-                delay = defer_until - now
-                log.debug('Deferring notifications for {} hours.'.format(delay.seconds / 3600))
-                self.notification_timer = Timer(delay.seconds, self.drain_deferred_notifications)
 
     def send_sms(self, recipient, message, flash=False):
         self.sms_provider.send_sms(recipient=recipient, message=message, flash=flash)
@@ -525,113 +439,6 @@ class DeviceEvent(object):
 
     def __str__(self):
         return self._device_key
-
-
-class Snapshot(object):
-    __metaclass__ = abc.ABCMeta
-
-    def __init__(self, validity_seconds):
-        self.validity_seconds = validity_seconds
-
-    @abc.abstractproperty
-    def timestamp(self):
-        return NotImplemented
-
-    @abc.abstractproperty
-    def is_expired(self):
-        return NotImplemented
-
-    @abc.abstractproperty
-    def data(self):
-        return NotImplemented
-
-    @abc.abstractproperty
-    def device_names(self):
-        return NotImplemented
-
-    @abc.abstractproperty
-    def devices(self):
-        return NotImplemented
-
-    @abc.abstractproperty
-    def source(self):
-        return NotImplemented
-
-
-class SampledSnapshot(Snapshot):
-
-    def __init__(self, snapshot_data, validity_seconds):
-        super(SampledSnapshot, self).__init__(validity_seconds=validity_seconds)
-        self.snapshot_data = snapshot_data
-        self.source_label = None
-        if 'location' in self.snapshot_data:
-            self.source_label = self.snapshot_data['location']
-        self.timestamp_data = dateutil.parser.parse(self.snapshot_data['timestamp'])
-        if self.timestamp_data.tzinfo is None:
-            # we use the physical locality of this device for timezone
-            self.timestamp_data = self.timestamp_data.replace(tzinfo=tz.tzlocal())
-        if 'data' in self.snapshot_data:
-            if 'samples' in self.snapshot_data['data']:
-                self.devices_data = self.snapshot_data['data']['samples']
-            else:
-                self.devices_data = None
-            if 'devices_nearby' in self.snapshot_data['data']:
-                self.devices_nearby = self.snapshot_data['data']['devices_nearby']
-            else:
-                self.devices_nearby = None
-        else:
-            self.devices_data = self.devices_nearby = None
-
-    @property
-    def timestamp(self):
-        return self.timestamp_data
-
-    @property
-    def is_expired(self):
-        now = datetime.utcnow().replace(tzinfo=pytz.utc)
-        return now - self.timestamp_data > timedelta(seconds=self.validity_seconds)
-
-    @property
-    def data(self):
-        return self.snapshot_data
-
-    @property
-    def device_names(self):
-        names = list()
-        if self.devices_data is not None:
-            for device_name in self.devices_data.keys():
-                if self.source_label:
-                    names.append(' '.join([self.source_label, device_name]))
-                else:
-                    names.append(device_name)
-        if self.devices_nearby is not None:
-            for device_name in self.devices_nearby.keys():
-                names.append('{} is here'.format(device_name))
-        if len(names) > 0:
-            return names
-        return None
-
-    @property
-    def devices(self):
-        devices = dict()
-        if self.devices_data is not None:
-            devices.update(self.devices_data)
-        if self.devices_nearby is not None:
-            devices.update(self.devices_nearby)
-        return devices
-
-    @property
-    def source(self):
-        return self.source_label
-
-    def __str__(self):
-        string = 'At {}'.format(self.timestamp.strftime('%X %x %Z'))
-        if self.source_label:
-            string = '{} at {}'.format(self.source_label, self.timestamp.strftime('%X %x %Z'))
-        if self.devices:
-            return string + ': {} devices: {}'.format(
-                len(self.devices), ','.join(self.devices.keys()))
-        return string
 
 
 class CloudStorage(object):
@@ -1008,44 +815,6 @@ class ApcEventTailer(LogTailer):
         return device_event
 
 
-class SampledSnapshotEventHandler(Thread):
-
-    def __init__(self, publisher_endpoint):
-        super(SampledSnapshotEventHandler, self).__init__()
-        self.name = '{}::{}'.format(self.__class__.__name__, publisher_endpoint)
-        self.daemon = True
-
-        self._publisher_endpoint = publisher_endpoint
-
-        self.subscriber = zmq_context.socket(zmq.SUB)
-
-        self.processor = zmq_context.socket(zmq.PUSH)
-
-        self.last_snapshot = dict()
-        self.active_devices = dict()
-        self.latest_snapshot = datetime.utcnow().replace(tzinfo=pytz.utc)
-        self.last_notification = 0
-
-    def run(self):
-        log.info('Connecting event subscriber to {}'.format(self._publisher_endpoint))
-        self.subscriber.connect(self._publisher_endpoint)
-        self.subscriber.setsockopt(zmq.SUBSCRIBE, "")
-        self.processor.connect(URL_WORKER_SNAPSHOT_PROCESSOR)
-        while True:
-            try:
-                snapshot_data = umsgpack.unpackb(self.subscriber.recv())
-            except UnpackException:
-                log.exception('Cannot unpack sampled snapshot data.')
-                continue
-            except ContextTerminated:
-                break
-            snapshot = SampledSnapshot(
-                snapshot_data=snapshot_data,
-                validity_seconds=snapshot_validity_seconds)
-            log.debug('Snapshot: {} from {}'.format(snapshot, self._publisher_endpoint))
-            self.processor.send_pyobj(snapshot)
-
-
 class SMSProvider(object):
     __metaclass__ = abc.ABCMeta
 
@@ -1060,6 +829,8 @@ class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
         super(GammuSMSProvider, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
+
+        self.notifier = zmq_context.socket(zmq.PUSH)
 
         gammu_cfg_file = config.get('sms', 'gammu-smsdrc')
         self.smsd = gammu.smsd.SMSD(gammu_cfg_file)
@@ -1101,6 +872,8 @@ class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
         self.smsd.InjectSMS([message])
 
     def run(self):
+        # inbound notifications
+        self.notifier.connect(URL_WORKER_NOTIFIER)
         while True:
             log.info("Dispatching SMS balance enquiry '{}' to {}".format(
                 self.sms_balance_check_message,
@@ -1142,13 +915,13 @@ class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
                     if topup_needed:
                         notification_message += 'Top-up soon.'
                     if len(notification_message) > 0:
-                        notifier.notify_voice(message=notification_message, informational=True)
+                        self.notifier.send_pyobj(TTSNotification(message=notification_message))
                     else:
                         # something more generic
                         pass
             elif self.error_path in event.src_path:
                 log.warn('SMS error at {}'.format(event.src_path))
-                notifier.notify_voice(message="SMS fault!", informational=True)
+                self.notifier.send_pyobj(TTSNotification(message="SMS fault!"))
             else:
                 log.warn('Unsupported SMS event path: {}'.format(event.src_path))
                 # some other path that is unsupported
@@ -1172,162 +945,9 @@ class ClickatellSMSProvider(SMSProvider):
             log.exception('Cannot SMS {}: {}'.format(recipient, message))
 
 
-class SnapshotProcessor(Thread):
-
-    _relay_ctrl = False
-    _notification_ctrl = True
-
-    def __init__(self):
-        super(SnapshotProcessor, self).__init__(name=self.__class__.__name__)
-        self.daemon = True
-
-        self.notifier = zmq_context.socket(zmq.PUSH)
-
-        self.relay_control = zmq_context.socket(zmq.PUSH)
-
-        self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.bind(URL_WORKER_SNAPSHOT_PROCESSOR)
-
-        self.active_devices = dict()
-        self.latest_snapshot = datetime.utcnow().replace(tzinfo=pytz.utc)
-        self.last_notification = 0
-
-    def run(self):
-        self.notifier.connect(URL_WORKER_NOTIFIER)
-        relay_control_endpoint = config.get('zmq', 'relay_control')
-        log.info('Relay control is at {}'.format(relay_control_endpoint))
-        self.relay_control.connect(relay_control_endpoint)
-        self.notifier.send_pyobj(AudioNotification(message=os.path.join(TTS_DIR,
-                                                                        config.get('app', 'tts_startup_sound'))))
-        while True:
-            try:
-                snapshot = self.socket.recv_pyobj()
-            except ContextTerminated:
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                continue
-            log_msg = 'Processing: {}'.format(snapshot)
-            if len(snapshot.devices) > 0:
-                log.info(log_msg)
-            else:
-                log.debug(log_msg)
-            if snapshot.is_expired:
-                log.debug('Discarding expired snapshot {}'.format(snapshot))
-                continue
-            # only non-expired snapshots qualify as recent updates
-            # throw away expired devices
-            for device_name in self.active_devices.keys():
-                if datetime.utcnow().replace(tzinfo=pytz.utc) - self.active_devices[device_name] > timedelta(seconds=snapshot.validity_seconds):
-                    del self.active_devices[device_name]
-            # anything to process?
-            if len(snapshot.devices) == 0:
-                continue
-            # make a copy of the remaining, active devices
-            old_device_names = self.active_devices.keys()
-            # refresh the active devices
-            for device_name in snapshot.device_names:
-                self.active_devices[device_name] = snapshot.timestamp
-            # determine the new devices
-            new_device_names = list(set(self.active_devices.keys()) - set(old_device_names))
-            if len(self.active_devices) > 0 or len(new_device_names) > 0:
-                log.debug('{} active device(s) ({}), {} new ({}).'.format(
-                    len(self.active_devices),
-                    ','.join(self.active_devices.keys()),
-                    len(new_device_names),
-                    ','.join(new_device_names)))
-            last_notified = time.time() - self.last_notification
-            # notify if the notification interval has elapsed or if there are new devices
-            # and if the snapshot is newer than the last one for which a notification was sent
-            if (last_notified > notification_interval_seconds or len(new_device_names) > 0) \
-                    and self.latest_snapshot < snapshot.timestamp:
-                log.debug('Setting latest snapshot [{}] to [{}] from {} ({})'.format(
-                    self.latest_snapshot,
-                    snapshot.timestamp,
-                    snapshot.device_names,
-                    snapshot))
-                self.latest_snapshot = snapshot.timestamp
-                self.last_notification = time.time()
-                log.info('Sending notification for {}'.format(str(new_device_names)))
-                for device_name in new_device_names:
-                    #FIXME
-                    if 'House Alarm' in device_name or 'UPS' in device_name or 'Smoke Detector' in device_name:
-                        if 'Self Test' not in device_name:
-                            for name, recipient in sms_owners.items():
-                                message = str(snapshot)
-                                log.info('Send SMS {} ({}) {} characters: {}'.format(name, recipient, len(message), message))
-                                self.notifier.send_pyobj(SMSNotification(message=message, recipient=recipient, flash=False))
-                    #FIXME
-                    if 'Patio Motion Detector' in device_name or 'Back Yard Motion Detector' in device_name or 'Pool Motion Detector' in device_name or 'Kitchen Door Motion Detector' in device_name:
-                        if SnapshotProcessor._notification_ctrl:
-                            self.notifier.send_pyobj(TTSNotification(message=device_name))
-                    else:
-                        self.notifier.send_pyobj(TTSNotification(message=device_name))
-                    #FIXME
-                    if SnapshotProcessor._relay_ctrl:
-                        if 'Patio Motion Detector' in device_name or 'Back Yard Motion Detector' in device_name or 'Pool Motion Detector' in device_name or 'Kitchen Door Motion Detector' in device_name:
-                            relays = 1
-                            relay_activations = dict()
-                            for i in range(1, relays+1):
-                                relay_activations['relay{}'.format(i)] = {'state': True, 'delay': 2}
-                            payload = dict()
-                            payload['relays'] = relay_activations
-                            log.info("Sending relay control: '{}'".format(payload))
-                            self.relay_control.send(umsgpack.packb(payload))
-            else:
-                log.debug("Not notifying yet, last notified: [{}], latest snapshot: [{}], current snapshot: [{}]".format(
-                    last_notified,
-                    self.latest_snapshot,
-                    snapshot.timestamp))
-
-
 def signal_handler(signum, frame):
     log.warn('Signal {} received.'.format(signum))
     log.setLevel(logging.DEBUG)
-    #TODO remove/fix
-    #log.debug('Draining deferred notifications now.')
-    #notifier.drain_deferred_notifications()
-
-
-@rest_api.route('/logging')
-def debug():
-    log.setLevel(request.args.get('level'))
-    return 'OK'
-
-
-@rest_api.route('/relay_ctrl_toggle', methods=['GET','POST'])
-def relay_ctrl_toggle():
-    if SnapshotProcessor._relay_ctrl:
-        SnapshotProcessor._relay_ctrl = False
-    else:
-        SnapshotProcessor._relay_ctrl = True
-    return redirect(url_for('index'))
-
-@rest_api.route('/notification_toggle', methods=['GET','POST'])
-def notification_toggle():
-    if SnapshotProcessor._notification_ctrl:
-        SnapshotProcessor._notification_ctrl = False
-    else:
-        SnapshotProcessor._notification_ctrl = True
-    return redirect(url_for('index'))
-
-@rest_api.route('/', methods=['GET','POST'])
-def index():
-    relays = 'Beep Beeps {}'
-    if SnapshotProcessor._relay_ctrl:
-        relays = relays.format('ON')
-    else:
-        relays = relays.format('OFF')
-    notifications = 'Crazy Lady {}'
-    if SnapshotProcessor._notification_ctrl:
-        notifications = notifications.format('ON')
-    else:
-        notifications = notifications.format('OFF')
-    return render_template('index.html', relays=relays, notifications=notifications)
-
-
-def run_flask():
-    rest_api.run(host=config.get('app', 'eth0_ip'), port=5000)
 
 
 def thread_nanny(threads_tracked):
@@ -1415,10 +1035,6 @@ if __name__ == "__main__":
         raise RuntimeError('Unknown SMS method specified: {}'.format(sms_method))
     # application threads
     notifier = Notifier(sms_provider=sms_provider)
-    snapshot_processor = SnapshotProcessor()
-    # sampled snapshot processing
-    #sample_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'sample_publisher'))
-    #detector_event_handler = SampledSnapshotEventHandler(publisher_endpoint=config.get('zmq', 'detector_publisher'))
     # ensure that auth is properly set up first
     google_drive_archiver = GoogleDriveArchiver(
         gauth_creds_file=config.get('gdrive', 'creds_file'),
@@ -1429,15 +1045,9 @@ if __name__ == "__main__":
     # start threads
     notifier.start()
     threads_tracked.add(notifier.getName())
-    snapshot_processor.start()
-    threads_tracked.add(snapshot_processor.getName())
     # start the collectors
     google_drive_uploader.start()
     threads_tracked.add(google_drive_uploader.getName())
-    #sample_event_handler.start()
-    #threads_tracked.add(sample_event_handler.getName())
-    #detector_event_handler.start()
-    #threads_tracked.add(detector_event_handler.getName())
     observer.start()
     threads_tracked.add(observer.getName())
     if log_tailer:
@@ -1450,11 +1060,6 @@ if __name__ == "__main__":
     # start the Google Driver archiver last
     google_drive_archiver.start()
     threads_tracked.add(google_drive_archiver.getName())
-    # start the REST interface
-    f = threading.Thread(name='flask', target=run_flask)
-    f.setDaemon(True)
-    f.start()
-    threads_tracked.add(f.getName())
     f = threading.Thread(name='nanny', target=thread_nanny, args=(threads_tracked,))
     f.setDaemon(True)
     f.start()
