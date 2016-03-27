@@ -53,7 +53,7 @@ DIR = os.path.abspath(os.path.dirname(__file__))
 pidfile = '/var/run/{}.pid'.format(APP)
 if os.path.isfile(pidfile):
     pid = int(open(pidfile, 'r').read())
-    message = '{} already exists containing PID.'.format(pidfile, pid)
+    message = '{} already exists containing PID {}.'.format(pidfile, pid)
     proc_path = '/proc/{}/cmdline'.format(pid)
     # existing process?
     if os.path.isfile(proc_path):
