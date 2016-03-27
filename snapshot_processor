@@ -956,25 +956,32 @@ class ClickatellSMSProvider(SMSProvider):
             log.exception('Cannot SMS {}: {}'.format(recipient, message))
 
 
-signal_value = 0
+class SignalHandler:
 
+    def __init__(self):
+        self.last_signal = 0
+        signal.signal(signal.SIGINT, self.terminate)
+        signal.signal(signal.SIGTERM, self.terminate)
+        signal.signal(signal.SIGHUP, self.hup)
 
-def signal_handler(signum, frame):
-    log.warn('Signal {} received.'.format(signum))
-    signal_value = signum
-    if signum == signal.SIGHUP:
+    def hup(self, signum, frame):
+        log.warn('Signal {} received.'.format(signum))
+        self.last_signal = signum
         if log.getEffectiveLevel() == logging.INFO:
             log.setLevel(logging.DEBUG)
         elif log.getEffectiveLevel() == logging.DEBUG:
             log.setLevel(logging.INFO)
-    elif signum == signal.SIGTERM:
+
+    def terminate(self, signum, frame):
+        log.warn('Signal {} received.'.format(signum))
+        self.last_signal = signum
         raise SystemExit()
 
 
-def thread_nanny(threads_tracked):
+def thread_nanny(threads_tracked, signal_handler):
     while True:
         # kill the nanny now
-        if signal_value == signal.SIGTERM:
+        if signal_handler.last_signal == signal.SIGTERM:
             break
         threads_alive = Set()
         for thread_info in threading.enumerate():
@@ -983,7 +990,6 @@ def thread_nanny(threads_tracked):
         if len(threads_tracked - threads_alive) > 0:
             message = 'A thread has died. Expected threads are [{}], missing is [{}].'.format(threads_tracked, threads_tracked - threads_alive)
             log.error(message)
-            sys.exit(1)
         time.sleep(10)
 
 
@@ -1084,14 +1090,13 @@ if __name__ == "__main__":
     # start the Google Driver archiver last
     google_drive_archiver.start()
     threads_tracked.add(google_drive_archiver.getName())
-    f = threading.Thread(name='nanny', target=thread_nanny, args=(threads_tracked,))
+    # app plumbing
+    signal_handler = SignalHandler()
+    f = threading.Thread(name='nanny', target=thread_nanny, args=(threads_tracked, signal_handler,))
     f.setDaemon(True)
     f.start()
     uploader_socket = zmq_context.socket(zmq.PUSH)
     uploader_socket.connect(URL_WORKER_UPLOADER)
-    # set up signal handlers
-    signal.signal(signal.SIGHUP, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
     try:
         # startup completed
         # back to INFO logging
@@ -1111,6 +1116,6 @@ if __name__ == "__main__":
     finally:
         log.info('Removing PID file {}'.format(pidfile))
         os.unlink(pidfile)
-    log.info('Exiting with code {}'.format(signal_value))
+    log.info('Exiting with code {}'.format(signal_handler.last_signal))
     # exit using the signal, if any
-    sys.exit(signal_value)
+    sys.exit(signal_handler.last_signal)
