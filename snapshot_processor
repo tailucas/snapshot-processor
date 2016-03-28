@@ -1146,7 +1146,6 @@ if __name__ == "__main__":
             log_tailer.close()
         # since this thread and the signal handler are one and the same
         uploader_socket.close()
-        log.info('Closing messaging...')
         zmq_context.term()
     finally:
         log.info('Removing PID file {}'.format(pidfile))
