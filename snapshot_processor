@@ -988,7 +988,6 @@ class SignalHandler:
 
     def __init__(self):
         self.last_signal = 0
-        signal.signal(signal.SIGINT, self.terminate)
         signal.signal(signal.SIGTERM, self.terminate)
         signal.signal(signal.SIGHUP, self.hup)
 
@@ -1009,7 +1008,7 @@ class SignalHandler:
 def thread_nanny(threads_tracked, signal_handler):
     while True:
         # kill the nanny now
-        if signal_handler.last_signal == signal.SIGTERM or signal_handler.last_signal == signal.SIGINT:
+        if signal_handler.last_signal == signal.SIGTERM:
             break
         threads_alive = Set()
         for thread_info in threading.enumerate():
