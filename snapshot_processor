@@ -1002,7 +1002,7 @@ class SignalHandler:
     def terminate(self, signum, frame):
         log.warn('Signal {} received.'.format(signum))
         self.last_signal = signum
-        raise SystemExit()
+        raise RuntimeWarning()
 
 
 def thread_nanny(threads_tracked, signal_handler):
@@ -1134,7 +1134,7 @@ if __name__ == "__main__":
                         'device_info': device_info
                     })
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
-    except(KeyboardInterrupt, SystemExit, ContextTerminated):
+    except(KeyboardInterrupt, RuntimeWarning, ContextTerminated):
         observer.stop()
         observer.join()
         upload_event_handler.close()
