@@ -83,6 +83,7 @@ snapshot_root = config.get('snapshots', 'root_dir')
 cloud_storage = None
 
 zmq_context = zmq.Context()
+zmq_context.setsockopt(zmq.LINGER, 1)
 URL_WORKER_NOTIFIER = 'inproc://notifier'
 URL_WORKER_UPLOADER = 'inproc://uploader'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
@@ -99,13 +100,11 @@ class Uploader(Thread):
         # inproc socket to accept messages to publish
         # to the outside world
         self.inproc_pull = zmq_context.socket(zmq.PULL)
-        self.inproc_pull.setsockopt(zmq.LINGER, 0)
         self.inproc_pull.bind(URL_WORKER_UPLOADER)
 
     def run(self):
         # Socket to talk to the outside world
         publisher = zmq_context.socket(zmq.PUB)
-        publisher.setsockopt(zmq.LINGER, 0)
         publisher.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
                                                   port=config.get('zmq', 'pubsub_port')))
         while True:
@@ -120,7 +119,6 @@ class Uploader(Thread):
                     event_data = event
                 publisher.send(Uploader.make_payload(timestamp, event_data))
             except ContextTerminated:
-                log.exception(self.__class__.__name__)
                 self.inproc_pull.close()
                 publisher.close()
                 break
@@ -147,10 +145,8 @@ class DeviceActivator(Thread):
         self.daemon = True
 
         self.listener = zmq_context.socket(zmq.PULL)
-        self.listener.setsockopt(zmq.LINGER, 0)
         # what to do with notifications
         self.notifier = zmq_context.socket(zmq.PUSH)
-        self.notifier.setsockopt(zmq.LINGER, 0)
 
     def run(self):
         # outputs
@@ -195,7 +191,6 @@ class DeviceActivator(Thread):
                         log.error('Unconfigured output type {} for input context {}'.format(output_type, event_data))
                         continue
             except ContextTerminated:
-                log.exception(self.__class__.__name__)
                 self.listener.close()
                 self.notifier.close()
                 break
@@ -268,7 +263,6 @@ class Notifier(Thread):
         self.sms_provider = sms_provider
 
         self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.bind(URL_WORKER_NOTIFIER)
 
         self.tts_default_sound_file = config.get('app', 'tts_default_sound')
@@ -290,7 +284,6 @@ class Notifier(Thread):
             try:
                 notification = self.socket.recv_pyobj()
             except ContextTerminated:
-                log.exception(self.__class__.__name__)
                 self.socket.close()
                 break
             except Exception:
@@ -648,7 +641,6 @@ class GoogleDriveUploader(GoogleDriveManager):
         self.daemon = True
 
         self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.bind(URL_WORKER_CLOUD_STORAGE)
 
     def run(self):
@@ -657,7 +649,6 @@ class GoogleDriveUploader(GoogleDriveManager):
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
                 self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
             except ContextTerminated:
-                log.exception(self.__class__.__name__)
                 self.socket.close()
                 break
             except Exception:
@@ -712,11 +703,9 @@ class UploadEventHandler(FileSystemEventHandler):
         fs_observer.schedule(self, snapshot_root, recursive=True)
 
         self.cloud_storage_socket = zmq_context.socket(zmq.PUSH)
-        self.cloud_storage_socket.setsockopt(zmq.LINGER, 0)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
         self.uploader = zmq_context.socket(zmq.PUSH)
-        self.uploader.setsockopt(zmq.LINGER, 0)
         self.uploader.connect(URL_WORKER_UPLOADER)
 
     def close(self):
@@ -780,7 +769,6 @@ class UploadEventHandler(FileSystemEventHandler):
                                 device_event.timestamp
                             ))
                         except ContextTerminated:
-                            log.exception(self.__class__.__name__)
                             self.uploader.close()
                             self.cloud_storage_socket.close()
                             return
@@ -811,7 +799,6 @@ class LogTailer(Thread):
             raise RuntimeError('Tailing syslog will result in log feedback.')
 
         self.uploader = zmq_context.socket(zmq.PUSH)
-        self.uploader.setsockopt(zmq.LINGER, 0)
 
     @staticmethod
     def _sleep():
@@ -829,7 +816,6 @@ class LogTailer(Thread):
                     if notification:
                         self.uploader.send_pyobj(notification)
             except ContextTerminated:
-                log.exception(self.__class__.__name__)
                 self.uploader.close()
                 break
             except Exception:
@@ -838,6 +824,9 @@ class LogTailer(Thread):
     def process_line(self, log_line):
         log.info('{}: {}'.format(self.log_label, log_line))
         return None
+
+    def close(self):
+        self.uploader.close()
 
 
 class ApcEventTailer(LogTailer):
@@ -881,7 +870,6 @@ class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
         self.daemon = True
 
         self.notifier = zmq_context.socket(zmq.PUSH)
-        self.notifier.setsockopt(zmq.LINGER, 0)
 
         gammu_cfg_file = config.get('sms', 'gammu-smsdrc')
         self.smsd = gammu.smsd.SMSD(gammu_cfg_file)
@@ -975,7 +963,6 @@ class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
                 try:
                     self.notifier.send_pyobj(TTSNotification(message="SMS fault!"))
                 except ContextTerminated:
-                    log.exception(self.__class__.__name__)
                     self.notifier.close()
                     return
             else:
@@ -1140,7 +1127,6 @@ if __name__ == "__main__":
     f.setDaemon(True)
     f.start()
     uploader_socket = zmq_context.socket(zmq.PUSH)
-    uploader_socket.setsockopt(zmq.LINGER, 0)
     uploader_socket.connect(URL_WORKER_UPLOADER)
     try:
         # startup completed
@@ -1153,14 +1139,14 @@ if __name__ == "__main__":
                     })
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated):
-        log.exception(__name__)
         observer.stop()
         observer.join()
         upload_event_handler.close()
+        if log_tailer:
+            log_tailer.close()
         # since this thread and the signal handler are one and the same
         uploader_socket.close()
         log.info('Closing messaging...')
-        #TODO: switch back to zmq_term()
         zmq_context.term()
     finally:
         log.info('Removing PID file {}'.format(pidfile))
