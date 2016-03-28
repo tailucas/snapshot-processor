@@ -799,12 +799,18 @@ class LogTailer(Thread):
 
         self.uploader = zmq_context.socket(zmq.PUSH)
 
+    @staticmethod
+    def _sleep():
+        #TODO: remove when Pygtail no longer spins
+        time.sleep(1)
+
     def run(self):
         log.info('Tailing log {} as {}'.format(self.log_path, self.log_label))
         self.uploader.connect(URL_WORKER_UPLOADER)
         while True:
             try:
-                for line in Pygtail(self.log_path):
+                for line in Pygtail(filename=self.log_path, on_update=LogTailer._sleep):
+                    log.debug('Processing line: {}'.format(line))
                     notification = self.process_line(line)
                     if notification:
                         self.uploader.send_pyobj(notification)
@@ -1136,7 +1142,8 @@ if __name__ == "__main__":
         # since this thread and the signal handler are one and the same
         uploader_socket.close()
         log.info('Closing messaging...')
-        zmq_context.term()
+        #TODO: switch back to zmq_term()
+        zmq_context.destroy()
     finally:
         log.info('Removing PID file {}'.format(pidfile))
         os.unlink(pidfile)
