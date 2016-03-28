@@ -120,6 +120,7 @@ class Uploader(Thread):
                     event_data = event
                 publisher.send(Uploader.make_payload(timestamp, event_data))
             except ContextTerminated:
+                log.exception(self.__class__.__name__)
                 self.inproc_pull.close()
                 publisher.close()
                 break
@@ -194,6 +195,7 @@ class DeviceActivator(Thread):
                         log.error('Unconfigured output type {} for input context {}'.format(output_type, event_data))
                         continue
             except ContextTerminated:
+                log.exception(self.__class__.__name__)
                 self.listener.close()
                 self.notifier.close()
                 break
@@ -288,6 +290,7 @@ class Notifier(Thread):
             try:
                 notification = self.socket.recv_pyobj()
             except ContextTerminated:
+                log.exception(self.__class__.__name__)
                 self.socket.close()
                 break
             except Exception:
@@ -654,6 +657,7 @@ class GoogleDriveUploader(GoogleDriveManager):
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
                 self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
             except ContextTerminated:
+                log.exception(self.__class__.__name__)
                 self.socket.close()
                 break
             except Exception:
@@ -776,6 +780,7 @@ class UploadEventHandler(FileSystemEventHandler):
                                 device_event.timestamp
                             ))
                         except ContextTerminated:
+                            log.exception(self.__class__.__name__)
                             self.uploader.close()
                             self.cloud_storage_socket.close()
                             return
@@ -824,6 +829,7 @@ class LogTailer(Thread):
                     if notification:
                         self.uploader.send_pyobj(notification)
             except ContextTerminated:
+                log.exception(self.__class__.__name__)
                 self.uploader.close()
                 break
             except Exception:
@@ -969,6 +975,7 @@ class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
                 try:
                     self.notifier.send_pyobj(TTSNotification(message="SMS fault!"))
                 except ContextTerminated:
+                    log.exception(self.__class__.__name__)
                     self.notifier.close()
                     return
             else:
@@ -1146,6 +1153,7 @@ if __name__ == "__main__":
                     })
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated):
+        log.exception(__name__)
         observer.stop()
         observer.join()
         upload_event_handler.close()
