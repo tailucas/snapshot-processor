@@ -1009,7 +1009,7 @@ class SignalHandler:
 def thread_nanny(threads_tracked, signal_handler):
     while True:
         # kill the nanny now
-        if signal_handler.last_signal == signal.SIGTERM:
+        if signal_handler.last_signal == signal.SIGTERM or signal_handler.last_signal == signal.SIGINT:
             break
         threads_alive = Set()
         for thread_info in threading.enumerate():
