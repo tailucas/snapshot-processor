@@ -707,6 +707,10 @@ class UploadEventHandler(FileSystemEventHandler):
         self.uploader = zmq_context.socket(zmq.PUSH)
         self.uploader.connect(URL_WORKER_UPLOADER)
 
+    def close(self):
+        self.cloud_storage_socket.close()
+        self.uploader.close()
+
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
             raise RuntimeError('Image source label {} is already configured.'.format(device_location))
@@ -1128,6 +1132,7 @@ if __name__ == "__main__":
     except(KeyboardInterrupt, SystemExit, ContextTerminated):
         observer.stop()
         observer.join()
+        upload_event_handler.close()
         # since this thread and the signal handler are one and the same
         uploader_socket.close()
         log.info('Closing messaging...')
