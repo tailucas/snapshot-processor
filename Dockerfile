@@ -32,7 +32,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rsyslog \
     ssl-cert \
     supervisor \
-    taglib \
     vim \
     vsftpd \
     wget \
