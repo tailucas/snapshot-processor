@@ -317,11 +317,12 @@ class Notifier(Thread):
             try:
                 delay = int(self.player.length)
             except TypeError:
+                log.exception("Cannot use Player to evaluate length for {}.".format(sound_file))
                 try:
                     tag = TinyTag.get(sound_file)
                     delay = tag.duration
-                    log.exception("Using TinyTag to get duration of {} for {}.".format(delay, sound_file))
-                except TinyTagException:
+                    log.warn("Using TinyTag to get duration of {} for {}.".format(delay, sound_file))
+                except Exception:
                     log.exception("Neither Player nor TinyTag could evaluate duration for {}.".format(sound_file))
             # block for the duration of this audio sample
             log.debug("Playing '{}' for {}s".format(sound_file, delay))
