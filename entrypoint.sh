@@ -96,7 +96,9 @@ export FTP_ROOT="${FTP_HOME}/ftp"
 export STORAGE_ROOT="/data/ftp"
 STORAGE_UPLOADS="${STORAGE_ROOT}/uploads"
 mkdir -p "${STORAGE_UPLOADS}"
-ln -s "$STORAGE_ROOT" "$FTP_ROOT"
+if [ ! -h "$FTP_ROOT" ]; then
+  ln -s "$STORAGE_ROOT" "$FTP_ROOT"
+fi
 chown -R "${FTP_USER}:${APP_GROUP}" "${FTP_HOME}/"
 chown -R "${FTP_USER}:${APP_GROUP}" "${STORAGE_ROOT}/"
 chmod a-w "${FTP_ROOT}"
