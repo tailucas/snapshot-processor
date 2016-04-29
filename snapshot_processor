@@ -37,7 +37,6 @@ from sets import Set
 from Queue import Queue, Empty
 from threading import Thread, Timer
 from time import sleep
-from tinytag import TinyTag, TinyTagException
 from umsgpack import UnpackException
 from urllib import pathname2url
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
@@ -317,13 +316,7 @@ class Notifier(Thread):
             try:
                 delay = int(self.player.length)
             except TypeError:
-                log.exception("Cannot use Player to evaluate length for {}.".format(sound_file))
-                try:
-                    tag = TinyTag.get(sound_file)
-                    delay = tag.duration
-                    log.warn("Using TinyTag to get duration of {} for {}.".format(delay, sound_file))
-                except Exception:
-                    log.exception("Neither Player nor TinyTag could evaluate duration for {}.".format(sound_file))
+                log.debug("Cannot use Player to evaluate length for {}.".format(sound_file))
             # block for the duration of this audio sample
             log.debug("Playing '{}' for {}s".format(sound_file, delay))
             sleep(delay)
