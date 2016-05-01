@@ -152,6 +152,10 @@ service apcupsd start
 touch /var/log/apcupsd.events.offset
 chown "${APP_USER}:${APP_GROUP}" /var/log/apcupsd.events.offset
 
+# Used by resin-sdk Settings
+export USER="${APP_USER}"
+export HOME=/data/
+
 # I'm the supervisor
 cat /app/config/supervisord.conf | python /app/config_interpol | tee /etc/supervisor/conf.d/supervisord.conf
 /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
