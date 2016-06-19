@@ -178,6 +178,13 @@ class DeviceActivator(Thread):
                         if 'device_params' not in event_data['trigger_output']:
                             log.error('Parameters must be configured for output type {}'.format(output_type))
                             continue
+                        # add in some trigger history for context
+                        if 'trigger_history' in event_data:
+                            for history_device_label, trigger_secs_ago in event_data['trigger_history']:
+                                history_info = "\n{}s ago: {}".format(trigger_secs_ago, history_device_label)
+                                if len(notification_message) + len(history_info) >= 160:
+                                    break
+                                notification_message += history_info
                         recipients = event_data['trigger_output']['device_params'].strip().split(',')
                         for recipient in recipients:
                             name_number = recipient.split(';')
