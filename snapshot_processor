@@ -92,6 +92,33 @@ DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 HEARTBEAT_INTERVAL_SECONDS = 5
 
 
+def parse_datetime(value=None):
+    timestamp = datetime.utcnow().replace(tzinfo=pytz.utc)
+    if value is None:
+        return timestamp
+    if isinstance(value, basestring):
+        try:
+            timestamp = dateutil.parser.parse(value)
+            log.debug('Parsed timestamp is {}'.format(timestamp))
+        except ValueError:
+            log.exception("Cannot parse date-like string {}. Defaulting to '{}'.".format(value, timestamp))
+    elif isinstance(value, datetime):
+        timestamp = value
+    else:
+        raise RuntimeError("Unknown date/time type: '{}'".format(value))
+    # ensure that some timezone information is present
+    if timestamp.tzinfo is None:
+        use_tz = tz.tzlocal()
+        log.debug('{}: setting to local time {}'.format(timestamp, use_tz))
+        # we use the default specific to the physical locality of the devices
+        timestamp = timestamp.replace(tzinfo=use_tz)
+    elif timestamp.tzinfo != pytz.utc:
+        # now normalize to UTC
+        log.debug('{}: setting to UTC from {}'.format(timestamp, timestamp.tzinfo))
+        timestamp = timestamp.astimezone(pytz.utc)
+    return timestamp
+
+
 class Uploader(Thread):
 
     def __init__(self):
@@ -130,7 +157,13 @@ class Uploader(Thread):
     def make_payload(timestamp=None, data=None):
         payload = dict()
         if timestamp is None:
-            timestamp = datetime.utcfromtimestamp(time.time()).replace(tzinfo=pytz.utc).strftime(DATE_FORMAT)
+            timestamp = datetime.utcnow().replace(tzinfo=pytz.utc)
+        elif isinstance(timestamp, float):
+            timestamp = datetime.utcfromtimestamp(timestamp).replace(tzinfo=pytz.utc)
+        if isinstance(timestamp, datetime):
+            timestamp = timestamp.strftime(DATE_FORMAT)
+        if not isinstance(timestamp, basestring):
+            log.warn('Non-string timestamp {} for payload {}'.format(timestamp, data))
         payload['timestamp'] = timestamp
         if data is not None and len(data) > 0:
             payload['data'] = data
@@ -157,6 +190,10 @@ class DeviceActivator(Thread):
         while True:
             try:
                 event = umsgpack.unpackb(self.listener.recv())
+                if 'timestamp' in event:
+                    timestamp = parse_datetime(value=event['timestamp'])
+                else:
+                    timestamp = parse_datetime(value=None)
                 if 'data' not in event:
                     log.warn('Unknown event data: {}'.format(event))
                     continue
@@ -170,7 +207,11 @@ class DeviceActivator(Thread):
                     event_detail = ""
                     if 'event_detail' in event_data['input_context']:
                         event_detail = '. {}'.format(event_data['input_context']['event_detail'])
-                    notification_message = '{}{}'.format(device_label, event_detail)
+                    notification_message = '{}{} ({}:{})'.format(
+                        device_label,
+                        event_detail,
+                        timestamp.hour,
+                        timestamp.minute)
                     if output_type.lower() == 'tts':
                         log.info("TTS '{}'".format(notification_message))
                         self.notifier.send_pyobj(TTSNotification(message=notification_message))
