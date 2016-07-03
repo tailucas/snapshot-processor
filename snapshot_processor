@@ -92,8 +92,8 @@ DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 HEARTBEAT_INTERVAL_SECONDS = 5
 
 
-def parse_datetime(value=None):
-    timestamp = datetime.utcnow().replace(tzinfo=pytz.utc)
+def parse_datetime(value=None, as_tz=pytz.utc):
+    timestamp = datetime.utcnow().replace(tzinfo=as_tz)
     if value is None:
         return timestamp
     if isinstance(value, basestring):
@@ -108,14 +108,14 @@ def parse_datetime(value=None):
         raise RuntimeError("Unknown date/time type: '{}'".format(value))
     # ensure that some timezone information is present
     if timestamp.tzinfo is None:
-        use_tz = tz.tzlocal()
-        log.debug('{}: setting to local time {}'.format(timestamp, use_tz))
+        local_tz = tz.tzlocal()
+        log.debug('{}: setting to local time {}'.format(timestamp, local_tz))
         # we use the default specific to the physical locality of the devices
-        timestamp = timestamp.replace(tzinfo=use_tz)
-    elif timestamp.tzinfo != pytz.utc:
-        # now normalize to UTC
-        log.debug('{}: setting to UTC from {}'.format(timestamp, timestamp.tzinfo))
-        timestamp = timestamp.astimezone(pytz.utc)
+        timestamp = timestamp.replace(tzinfo=local_tz)
+    if timestamp.tzinfo != as_tz:
+        # now adjust to requested TZ
+        log.debug('{}: setting to {} from {}'.format(timestamp, as_tz, timestamp.tzinfo))
+        timestamp = timestamp.astimezone(tz=as_tz)
     return timestamp
 
 
@@ -191,9 +191,9 @@ class DeviceActivator(Thread):
             try:
                 event = umsgpack.unpackb(self.listener.recv())
                 if 'timestamp' in event:
-                    timestamp = parse_datetime(value=event['timestamp'])
+                    timestamp = parse_datetime(value=event['timestamp'], as_tz=tz.tzlocal())
                 else:
-                    timestamp = parse_datetime(value=None)
+                    timestamp = parse_datetime(value=None, as_tz=tz.tzlocal())
                 if 'data' not in event:
                     log.warn('Unknown event data: {}'.format(event))
                     continue
@@ -207,11 +207,11 @@ class DeviceActivator(Thread):
                     event_detail = ""
                     if 'event_detail' in event_data['input_context']:
                         event_detail = '. {}'.format(event_data['input_context']['event_detail'])
-                    notification_message = '{}{} ({}:{})'.format(
+                    notification_message = '{} ({}:{}){}'.format(
                         device_label,
-                        event_detail,
                         timestamp.hour,
-                        timestamp.minute)
+                        timestamp.minute,
+                        event_detail)
                     if output_type.lower() == 'tts':
                         log.info("TTS '{}'".format(notification_message))
                         self.notifier.send_pyobj(TTSNotification(message=notification_message))
