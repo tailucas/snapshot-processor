@@ -207,11 +207,7 @@ class DeviceActivator(Thread):
                     event_detail = ""
                     if 'event_detail' in event_data['input_context']:
                         event_detail = '. {}'.format(event_data['input_context']['event_detail'])
-                    notification_message = '{} ({}:{}){}'.format(
-                        device_label,
-                        timestamp.hour,
-                        timestamp.minute,
-                        event_detail)
+                    notification_message = '{}{}'.format(device_label, event_detail)
                     if output_type.lower() == 'tts':
                         log.info("TTS '{}'".format(notification_message))
                         self.notifier.send_pyobj(TTSNotification(message=notification_message))
@@ -219,6 +215,12 @@ class DeviceActivator(Thread):
                         if 'device_params' not in event_data['trigger_output']:
                             log.error('Parameters must be configured for output type {}'.format(output_type))
                             continue
+                        # include a timestamp in this SMS message
+                        notification_message = '{} ({}:{}){}'.format(
+                            device_label,
+                            timestamp.hour,
+                            timestamp.minute,
+                            event_detail)
                         # add in some trigger history for context
                         if 'trigger_history' in event_data:
                             for history_device_label, trigger_secs_ago in event_data['trigger_history']:
