@@ -219,7 +219,7 @@ class DeviceActivator(Thread):
                         notification_message = '{} ({}:{}){}'.format(
                             device_label,
                             timestamp.hour,
-                            timestamp.minute,
+                            str(timestamp.minute).zfill(2),
                             event_detail)
                         # add in some trigger history for context
                         if 'trigger_history' in event_data:
