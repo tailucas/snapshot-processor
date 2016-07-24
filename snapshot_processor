@@ -221,13 +221,18 @@ class DeviceActivator(Thread):
                             timestamp.hour,
                             str(timestamp.minute).zfill(2),
                             event_detail)
+                        footer = ''
+                        # add in the callback URL
+                        if 'callback_url' in event_data:
+                            footer = "\n{}".format(event_data['callback_url'])
                         # add in some trigger history for context
                         if 'trigger_history' in event_data:
                             for history_device_label, trigger_secs_ago in event_data['trigger_history']:
                                 history_info = "\n{}s ago: {}".format(trigger_secs_ago, history_device_label)
-                                if len(notification_message) + len(history_info) >= 160:
+                                if len(notification_message) + len(history_info) + len(footer) >= 160:
                                     break
                                 notification_message += history_info
+                        notification_message += footer
                         recipients = event_data['trigger_output']['device_params'].strip().split(',')
                         for recipient in recipients:
                             name_number = recipient.split(';')
