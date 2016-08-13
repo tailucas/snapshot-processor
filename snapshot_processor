@@ -206,7 +206,7 @@ class DeviceActivator(Thread):
                     device_label = event_data['input_context']['device_label']
                     event_detail = ""
                     if 'event_detail' in event_data['input_context']:
-                        event_detail = '. {}'.format(event_data['input_context']['event_detail'])
+                        event_detail = ' {}'.format(event_data['input_context']['event_detail'])
                     notification_message = '{}{}'.format(device_label, event_detail)
                     if output_type.lower() == 'tts':
                         log.info("TTS '{}'".format(notification_message))
