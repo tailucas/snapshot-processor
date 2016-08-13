@@ -216,11 +216,11 @@ class DeviceActivator(Thread):
                             log.error('Parameters must be configured for output type {}'.format(output_type))
                             continue
                         # include a timestamp in this SMS message
-                        notification_message = '{} ({}:{}){}'.format(
+                        notification_message = '{}{} ({}:{})'.format(
                             device_label,
+                            event_detail,
                             timestamp.hour,
-                            str(timestamp.minute).zfill(2),
-                            event_detail)
+                            str(timestamp.minute).zfill(2))
                         footer = ''
                         # add in the callback URL
                         if 'callback_url' in event_data:
