@@ -51,6 +51,11 @@ else
   cp -a /etc/localtime "$TZ_CACHE"
 fi
 
+# Used by resin-sdk Settings
+export USER="${APP_USER}"
+export HOME=/data/
+# invoke resin tool to write resin-sdk settings file
+python /app/resin
 
 # remote system logging
 HN_CACHE=/data/hostname
@@ -151,10 +156,6 @@ service apcupsd start
 # Pygtail log tailer
 touch /var/log/apcupsd.events.offset
 chown "${APP_USER}:${APP_GROUP}" /var/log/apcupsd.events.offset
-
-# Used by resin-sdk Settings
-export USER="${APP_USER}"
-export HOME=/data/
 
 # I'm the supervisor
 cat /app/config/supervisord.conf | python /app/config_interpol | tee /etc/supervisor/conf.d/supervisord.conf
