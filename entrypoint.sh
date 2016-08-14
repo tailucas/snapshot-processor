@@ -141,8 +141,7 @@ cat /app/config/app.conf | python /app/config_interpol > "/app/${APP_NAME}.conf"
 unset ETH0_IP
 unset SUB_SRC
 
-
-cat /app/config/cleanup_snapshots | sed 's/__STORAGE__/'"${STORAGE_UPLOADS//\//\/}\/"'/g' > /etc/cron.d/cleanup_snapshots
+cat /app/config/cleanup_snapshots | sed "s~__STORAGE__~${STORAGE_UPLOADS}/~g" > /etc/cron.d/cleanup_snapshots
 
 # tts samples
 cp -rv /app/tts_samples/ /data/
