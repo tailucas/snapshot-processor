@@ -906,7 +906,7 @@ class ApcEventTailer(LogTailer):
             device_location=self.device_location
         )
         device_event.timestamp = timestamp
-        device_event.event_detail = log_entry
+        device_event.event_detail = log_entry.lstrip('UPS ')
         return device_event
 
 
