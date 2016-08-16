@@ -20,8 +20,10 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     libssl-dev \
     man-db \
     manpages \
+    mediainfo \
     mplayer \
     net-tools \
+    omxplayer \
     openssh-server \
     openssl \
     psmisc \
@@ -34,6 +36,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     ssl-cert \
     supervisor \
     vim \
+    vorbis-tools \
     vsftpd \
     wget \
     # pip 8
