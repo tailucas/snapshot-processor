@@ -906,7 +906,11 @@ class ApcEventTailer(LogTailer):
             device_location=self.device_location
         )
         device_event.timestamp = timestamp
-        device_event.event_detail = log_entry.lstrip('UPS ')
+        # strip off (redundant) UPS prefix
+        ups_prefix = 'UPS '
+        if log_entry.startswith(ups_prefix):
+            log_entry = log_entry[len(ups_prefix):]
+        device_event.event_detail = log_entry
         return device_event
 
 
