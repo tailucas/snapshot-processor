@@ -23,7 +23,6 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     mediainfo \
     mplayer \
     net-tools \
-    omxplayer \
     openssh-server \
     openssl \
     psmisc \
