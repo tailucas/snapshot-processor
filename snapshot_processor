@@ -332,8 +332,9 @@ class Notifier(Thread):
 
     def run(self):
         # black-holing STDOUT causes properties to not work
-        self.player = Player(stderr=open('/dev/null', 'w'), autospawn=True)
-        self.play_file(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
+        #TODO: fix
+        #self.player = Player(stderr=open('/dev/null', 'w'), autospawn=True)
+        #self.play_file(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
         while True:
             notification = None
             try:
@@ -360,8 +361,9 @@ class Notifier(Thread):
                 log.error('Unknown notification type {}'.format(notification.__class__))
 
     def stop(self):
-        if self.player:
-            self.player.quit()
+        pass
+        #if self.player:
+        #    self.player.quit()
 
     def play_file(self, sound_file):
         if self.player:
