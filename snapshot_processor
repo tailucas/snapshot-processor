@@ -33,6 +33,7 @@ from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
 from pygtail import Pygtail
 from sets import Set
+from subprocess import PIPE, Popen
 from Queue import Queue, Empty
 from threading import Thread, Timer
 from time import sleep
@@ -90,6 +91,14 @@ DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 
 HEARTBEAT_INTERVAL_SECONDS = 5
 
+# lifted from the defunct https://github.com/baudm/mplayer.py/blob/master/mplayer/core.py
+mplayer = ['mplayer',
+           '-slave',
+           '-idle',
+           '-really-quiet',
+           '-msglevel', 'global=4',
+           '-input', 'nodefault-bindings',
+           '-noconfig', 'all']
 
 def parse_datetime(value=None, as_tz=pytz.utc):
     timestamp = datetime.utcnow().replace(tzinfo=as_tz)
@@ -330,10 +339,8 @@ class Notifier(Thread):
                          tts_api_cfg['credentials']['password'])
 
     def run(self):
-        # black-holing STDOUT causes properties to not work
-        #TODO: fix
-        #self.player = Player(stderr=open('/dev/null', 'w'), autospawn=True)
-        #self.play_file(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
+        self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE)
+        print >>self.player.stdin, 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
         while True:
             notification = None
             try:
@@ -366,11 +373,12 @@ class Notifier(Thread):
 
     def play_file(self, sound_file):
         if self.player:
-            self.player.loadfile(sound_file)
+            print >>self.player.stdin, 'loadfile {}'.format(sound_file)
             # delay for at least 1 second for short tones
             delay = 1
             try:
-                delay = int(self.player.length)
+                pass
+                #delay = int(self.player.length)
             except TypeError:
                 log.debug("Cannot use Player to evaluate length for {}.".format(sound_file))
             # block for the duration of this audio sample
