@@ -339,7 +339,7 @@ class Notifier(Thread):
                          tts_api_cfg['credentials']['password'])
 
     def run(self):
-        self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE)
+        self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, bufsize=1)
         self.player.communicate('loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound'))))
         while True:
             notification = None
@@ -369,7 +369,7 @@ class Notifier(Thread):
     def stop(self):
         if self.player:
             try:
-                self.player.communicate('quit', timeout=1)
+                self.player.communicate('quit')
             except Exception:
                 log.exception('Player not able to quit. Killing...')
                 self.player.kill()
@@ -381,7 +381,7 @@ class Notifier(Thread):
             sleep(1)
             while True:
                 # request the currently playing file
-                sound_file_playing = self.player.communicate('get_file_name', timeout=1)
+                sound_file_playing = self.player.communicate('get_file_name')[0]
                 if not sound_file_playing or len(sound_file_playing.rstrip()) == 0:
                     break
                 ans_prefix = 'ANS_FILENAME='
