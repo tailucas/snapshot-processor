@@ -17,6 +17,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     gcc \
     less \
     libffi-dev \
+    libraspberrypi-bin \
     libssl-dev \
     man-db \
     manpages \
@@ -32,7 +33,6 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     python2.7 \
     python2.7-dev \
     rsyslog \
-    sox \
     ssl-cert \
     supervisor \
     vim \
