@@ -27,7 +27,6 @@ from clickatell import constants as cc
 from datetime import datetime, timedelta
 from dateutil import tz
 from mimetypes import MimeTypes
-from mplayer import Player
 from pprint import pprint
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive

@@ -166,6 +166,9 @@ chown "${APP_USER}:${APP_GROUP}" /var/log/apcupsd.events.offset
 export USER="${APP_USER}"
 export HOME=/data/
 
+# link in libbcm_host.so required by mplayer
+sudo ln -fs /opt/vc/lib/libbcm_host.so /usr/lib/libbcm_host.so
+
 # I'm the supervisor
 cat /app/config/supervisord.conf | python /app/config_interpol | tee /etc/supervisor/conf.d/supervisord.conf
 
