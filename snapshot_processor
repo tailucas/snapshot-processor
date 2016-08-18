@@ -367,23 +367,35 @@ class Notifier(Thread):
                 log.error('Unknown notification type {}'.format(notification.__class__))
 
     def stop(self):
-        pass
-        #if self.player:
-        #    self.player.quit()
+        if self.player:
+            try:
+                print >>self.player.stdin, 'quit'
+            except Exception:
+                log.exception('Player not able to quit. Killing...')
+                self.player.kill()
 
     def play_file(self, sound_file):
         if self.player:
             print >>self.player.stdin, 'loadfile {}'.format(sound_file)
             # delay for at least 1 second for short tones
-            delay = 1
-            try:
-                pass
-                #delay = int(self.player.length)
-            except TypeError:
-                log.debug("Cannot use Player to evaluate length for {}.".format(sound_file))
-            # block for the duration of this audio sample
-            log.debug("Playing '{}' for {}s".format(sound_file, delay))
-            sleep(delay)
+            sleep(1)
+            while True:
+                # toss away anything waiting for consumption
+                self.player.stdout.flush()
+                # request the currently playing file
+                print >>self.player.stdin, 'get_file_name'
+                sound_file_playing = self.player.stdout.readline()
+                if not sound_file_playing or len(sound_file_playing) == 0:
+                    break
+                ans_prefix = 'ANS_FILENAME='
+                if sound_file_playing.startswith(ans_prefix):
+                    sound_file_playing = sound_file_playing[len(ans_prefix):].replace("'", '')
+                if sound_file_playing == os.path.basename(sound_file):
+                    log.debug('Playing {}.'.format(sound_file_playing))
+                else:
+                    log.warn('Expected to be playing {} but instead {}. Waiting...'.format(os.path.basename(sound_file),
+                                                                                           sound_file_playing))
+                sleep(1)
         else:
             log.error("No player loaded to play '{}'".format(sound_file))
 
@@ -1208,6 +1220,7 @@ if __name__ == "__main__":
                     })
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated):
+        notifier.stop()
         observer.stop()
         observer.join()
         upload_event_handler.close()
