@@ -382,11 +382,16 @@ class Notifier(Thread):
         if self.player:
             print >>self.player.stdin, 'loadfile {}'.format(sound_file)
             # delay for at least 1 second for short tones
-            sleep(1)
+            sleep(0.5)
             while True:
                 # request the currently playing file
                 print >>self.player.stdin, 'get_file_name'
-                sound_file_playing = self.player.stdout.readline()
+                sleep(0.5)
+                try:
+                    sound_file_playing = self.player.stdout.readline()
+                except IOError:
+                    # nothing to get
+                    break
                 if not sound_file_playing or len(sound_file_playing.rstrip()) == 0:
                     break
                 ans_prefix = 'ANS_FILENAME='
@@ -395,9 +400,10 @@ class Notifier(Thread):
                 if sound_file_playing == os.path.basename(sound_file):
                     log.debug('Playing {}.'.format(sound_file_playing))
                 else:
-                    log.warn('Expected to be playing {} but instead {}. Waiting...'.format(os.path.basename(sound_file),
-                                                                                           sound_file_playing))
-                sleep(1)
+                    log.debug('Expected to be playing {} but instead {}. Waiting...'.format(
+                        os.path.basename(sound_file),
+                        sound_file_playing))
+                sleep(0.5)
         else:
             log.error("No player loaded to play '{}'".format(sound_file))
 
