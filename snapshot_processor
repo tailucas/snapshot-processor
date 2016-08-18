@@ -340,7 +340,9 @@ class Notifier(Thread):
 
     def run(self):
         self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, bufsize=1)
-        self.player.communicate('loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound'))))
+        self.player.communicate('loadfile {}{}'.format(
+            os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')),
+            os.linesep))
         while True:
             notification = None
             try:
@@ -369,19 +371,18 @@ class Notifier(Thread):
     def stop(self):
         if self.player:
             try:
-                self.player.communicate('quit')
+                self.player.communicate('quit{}'.format(os.linesep))
             except Exception:
-                log.exception('Player not able to quit. Killing...')
                 self.player.kill()
 
     def play_file(self, sound_file):
         if self.player:
-            self.player.communicate('loadfile {}'.format(sound_file))
+            self.player.communicate('loadfile {}{}'.format(sound_file, os.linesep))
             # delay for at least 1 second for short tones
             sleep(1)
             while True:
                 # request the currently playing file
-                sound_file_playing = self.player.communicate('get_file_name')[0]
+                sound_file_playing = self.player.communicate('get_file_name{}'.format(os.linesep))[0]
                 if not sound_file_playing or len(sound_file_playing.rstrip()) == 0:
                     break
                 ans_prefix = 'ANS_FILENAME='
