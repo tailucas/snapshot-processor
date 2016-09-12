@@ -15,6 +15,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     dbus \
     g++ \
     gcc \
+    htop \
     less \
     libffi-dev \
     libraspberrypi-bin \
@@ -37,6 +38,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     supervisor \
     vim \
     vsftpd \
+    wavemon \
     wget \
     # pip 8
     && python /tmp/pipstrap.py
