@@ -1,4 +1,4 @@
-FROM resin/rpi-raspbian:latest
+FROM resin/raspberrypi2-debian:latest
 
 MAINTAINER db2inst1 <db2inst1@webafrica.org.za>
 LABEL Description="snapshot_processor" Vendor="db2inst1" Version="1.0"
