@@ -663,7 +663,7 @@ class GoogleDriveArchiver(GoogleDriveManager):
                                 archived += 1
                 except StopIteration:
                     log.info('Archived {} image snapshots.'.format(archived))
-            except (ApiRequestError, FileNotUploadedError):
+            except (ApiRequestError, FileNotUploadedError, socket.error):
                 log.exception('Archived {} image snapshots.'.format(archived))
             # prevent memory leaks
             self._folder_id_cache.clear()
