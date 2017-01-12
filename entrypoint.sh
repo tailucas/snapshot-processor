@@ -23,6 +23,19 @@ if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
 fi
 echo "$API_IBM_TTS" > /app/ibm_tts_creds.json
 
+# aws code commit
+if [ -n "${AWS_REPO_SSH_KEY_ID:-}" ]; then
+  # ssh
+  echo "$AWS_REPO_SSH_PRIVATE_KEY" | base64 -d > /root/.ssh/codecommit_rsa
+  chmod 600 /root/.ssh/codecommit_rsa
+  cat << EOF >> /root/.ssh/config
+StrictHostKeyChecking=no
+Host git-codecommit.*.amazonaws.com
+  User $AWS_REPO_SSH_KEY_ID
+  IdentityFile /root/.ssh/codecommit_rsa
+EOF
+  chmod 600 /root/.ssh/config
+fi
 
 set -x
 
