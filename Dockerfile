@@ -46,6 +46,9 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     # pip 8
     && python /tmp/pipstrap.py
 
+# disable for boot for now
+RUN systemctl disable vsftpd
+
 COPY ./config/pip_freeze /tmp/
 RUN pip install -r /tmp/pip_freeze
 # show outdated packages since the freeze

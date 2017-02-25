@@ -186,6 +186,10 @@ for systemdsvc in app; do
   chmod 664 "/etc/systemd/system/${systemdsvc}.service"
 done
 systemctl daemon-reload
+# vsftpd can be enabled now
+for systemdsvc in vsftpd; do
+  systemctl enable "${systemdsvc}"
+done
 # apcupsd needs to be bounced
 for systemdsvc in apcupsd; do
   systemctl restart "${systemdsvc}"
