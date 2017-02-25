@@ -186,6 +186,6 @@ for systemdsvc in app; do
   chmod 664 "/etc/systemd/system/${systemdsvc}.service"
 done
 systemctl daemon-reload
-for systemdsvc in vsftpd cron app; do
+for systemdsvc in cron apcupsd vsftpd cron app; do
   systemctl start "${systemdsvc}"
 done
