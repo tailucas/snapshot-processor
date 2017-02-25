@@ -159,6 +159,9 @@ cp -rv /app/tts_samples/ /data/
 
 # so app user can make the noise
 adduser "${APP_USER}" audio
+# set the volume
+amixer set PCM "${TTS_VOLUME_PERCENT:-100}%"
+
 
 # apcupsd
 sed -e '/ISCONFIGURED/ s/^#*/#/' -i /etc/default/apcupsd
