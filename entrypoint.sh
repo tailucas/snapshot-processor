@@ -190,6 +190,6 @@ systemctl daemon-reload
 for systemdsvc in apcupsd; do
   systemctl restart "${systemdsvc}"
 done
-for systemdsvc in cron vsftpd cron app; do
+for systemdsvc in cron vsftpd app; do
   systemctl start "${systemdsvc}"
 done
