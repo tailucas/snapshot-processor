@@ -186,6 +186,10 @@ for systemdsvc in app; do
   chmod 664 "/etc/systemd/system/${systemdsvc}.service"
 done
 systemctl daemon-reload
-for systemdsvc in cron apcupsd vsftpd cron app; do
+# apcupsd needs to be bounced
+for systemdsvc in apcupsd; do
+  systemctl restart "${systemdsvc}"
+done
+for systemdsvc in cron vsftpd cron app; do
   systemctl start "${systemdsvc}"
 done
