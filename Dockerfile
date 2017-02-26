@@ -55,4 +55,4 @@ RUN systemctl disable vsftpd
 
 # ftp, ssh, zmq
 EXPOSE 21 22 5556 5558
-CMD ["./app/entrypoint.sh"]
+CMD ["/app/entrypoint.sh"]
