@@ -4,8 +4,7 @@ ENV INITSYSTEM on
 MAINTAINER db2inst1 <db2inst1@webafrica.org.za>
 LABEL Description="snapshot_processor" Vendor="db2inst1" Version="1.0"
 
-COPY ./pipstrap.py /tmp/
-
+COPY . /app
 RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils \
     apcupsd \
@@ -44,24 +43,13 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     wavemon \
     wget \
     # pip 8
-    && python /tmp/pipstrap.py
+    && python /app/pipstrap.py
 
-COPY ./config/pip_freeze /tmp/
-RUN pip install -r /tmp/pip_freeze
-# show outdated packages since the freeze
-RUN pip list --outdated
-
-# ftp, ssh, zmq
-EXPOSE 21 22 5556 5558
+RUN pip install -r /app/config/requirements.txt
 
 # disable for boot for now
 RUN systemctl disable vsftpd
 
-# sshd configuration
-RUN mkdir /var/run/sshd
-RUN mkdir /root/.ssh/
-
-COPY . /app
-COPY ./entrypoint.sh /
-
-CMD ["/entrypoint.sh"]
+# ftp, ssh, zmq
+EXPOSE 21 22 5556 5558
+CMD ["./app/entrypoint.sh"]

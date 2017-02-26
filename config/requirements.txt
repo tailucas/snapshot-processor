@@ -1,0 +1,14 @@
+PyDrive
+argparse
+pathtools
+pygtail
+python-clickatell
+python-dateutil
+python-magic
+pytz
+pyzmq
+requests
+resin-sdk
+tzupdate
+u-msgpack-python
+watchdog
