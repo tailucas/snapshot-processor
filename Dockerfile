@@ -4,7 +4,7 @@ ENV INITSYSTEM on
 MAINTAINER db2inst1 <db2inst1@webafrica.org.za>
 LABEL Description="snapshot_processor" Vendor="db2inst1" Version="1.0"
 
-COPY . /app
+COPY ./pipstrap.py /tmp/
 RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils \
     apcupsd \
@@ -43,9 +43,12 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     wavemon \
     wget \
     # pip 8
-    && python /app/pipstrap.py
+    && python /tmp/pipstrap.py
 
-RUN pip install -r /app/config/requirements.txt
+COPY ./config/requirements.txt /tmp/
+RUN pip install -r /tmp/requirements.txt
+
+COPY . /app
 
 # disable for boot for now
 RUN systemctl disable vsftpd
