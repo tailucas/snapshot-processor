@@ -53,6 +53,9 @@ COPY . /app
 # disable for boot for now
 RUN systemctl disable vsftpd
 
+# Resin systemd
+COPY ./config/systemd.launch.service /etc/systemd/system/launch.service.d/app_override.conf
+
 # ftp, ssh, zmq
 EXPOSE 21 22 5556 5558
 CMD ["/app/entrypoint.sh"]

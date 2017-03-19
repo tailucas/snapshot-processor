@@ -176,20 +176,19 @@ service apcupsd start
 touch /var/log/apcupsd.events.offset
 chown "${APP_USER}:${APP_GROUP}" /var/log/apcupsd.events.offset
 
-# Used by resin-sdk Settings
-export USER="${APP_USER}"
-export HOME=/data/
-echo "export HISTFILE=/data/.bash_history_\${USER}" >> /etc/bash.bashrc
+echo "export HISTFILE=/data/.bash_history" >> /etc/bash.bashrc
 
 # link in libbcm_host.so required by mplayer
 sudo ln -fs /opt/vc/lib/libbcm_host.so /usr/lib/libbcm_host.so
 
 # systemd configuration
 for systemdsvc in app; do
-  cat "/app/config/systemd.${systemdsvc}.service" | python /app/config_interpol | tee "/etc/systemd/system/${systemdsvc}.service"
-  chmod 664 "/etc/systemd/system/${systemdsvc}.service"
+  if [ ! -e "/etc/systemd/system/${systemdsvc}.service" ]; then
+    cat "/app/config/systemd.${systemdsvc}.service" | python /app/config_interpol | tee "/etc/systemd/system/${systemdsvc}.service"
+    chmod 664 "/etc/systemd/system/${systemdsvc}.service"
+    systemctl daemon-reload
+  fi
 done
-systemctl daemon-reload
 # vsftpd can be enabled now
 for systemdsvc in vsftpd; do
   systemctl enable "${systemdsvc}"
@@ -199,5 +198,5 @@ for systemdsvc in apcupsd; do
   systemctl restart "${systemdsvc}"
 done
 for systemdsvc in cron vsftpd app; do
-  systemctl start "${systemdsvc}"
+  systemctl start "${systemdsvc}"&
 done
