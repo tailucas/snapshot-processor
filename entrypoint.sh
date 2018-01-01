@@ -127,6 +127,10 @@ fi
 chown -R "${FTP_USER}:${APP_GROUP}" "${FTP_HOME}/"
 chown -R "${FTP_USER}:${APP_GROUP}" "${STORAGE_ROOT}/"
 chmod a-w "${FTP_ROOT}"
+# user sub-directories
+for dir in $(echo "${FTP_CREATE_DIRS:-}" | sed "s/,/ /g"); do
+  mkdir -p "${STORAGE_UPLOADS}/${dir}"
+done
 
 echo "${FTP_USER}:${FTP_PASSWORD}" | chpasswd
 
