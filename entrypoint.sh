@@ -205,6 +205,7 @@ done
 for systemdsvc in apcupsd; do
   if ! grep -q "=UPS" "/app/${APP_NAME}.conf"; then
     systemctl disable "${systemdsvc}"
+    systemctl stop "${systemdsvc}"
   else
     systemctl restart "${systemdsvc}"
   fi
