@@ -201,9 +201,13 @@ done
 for systemdsvc in vsftpd; do
   systemctl enable "${systemdsvc}"
 done
-# apcupsd needs to be bounced
+# apcupsd needs to be bounced if used
 for systemdsvc in apcupsd; do
-  systemctl restart "${systemdsvc}"
+  if [ ! grep -q "=UPS" "/app/${APP_NAME}.conf" ]; then
+    systemctl disable "${systemdsvc}"
+  else
+    systemctl restart "${systemdsvc}"
+  fi
 done
 for systemdsvc in cron vsftpd app; do
   systemctl start "${systemdsvc}"&
