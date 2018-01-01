@@ -203,7 +203,7 @@ for systemdsvc in vsftpd; do
 done
 # apcupsd needs to be bounced if used
 for systemdsvc in apcupsd; do
-  if [ ! grep -q "=UPS" "/app/${APP_NAME}.conf" ]; then
+  if ! grep -q "=UPS" "/app/${APP_NAME}.conf"; then
     systemctl disable "${systemdsvc}"
   else
     systemctl restart "${systemdsvc}"
