@@ -35,6 +35,7 @@ from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
 from pygtail import Pygtail
 from sets import Set
+from socket import error as socket_error
 from subprocess import PIPE, Popen
 from Queue import Queue, Empty
 from threading import Thread, Timer
@@ -666,7 +667,7 @@ class GoogleDriveArchiver(GoogleDriveManager):
                                 archived += 1
                 except StopIteration:
                     log.info('Archived {} image snapshots.'.format(archived))
-            except (ApiRequestError, FileNotUploadedError, socket.error):
+            except (ApiRequestError, FileNotUploadedError, socket_error):
                 log.exception('Archived {} image snapshots.'.format(archived))
             # prevent memory leaks
             self._folder_id_cache.clear()
