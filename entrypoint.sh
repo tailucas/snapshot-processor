@@ -170,6 +170,11 @@ adduser "${APP_USER}" audio
 # set the volume
 amixer set PCM "${TTS_VOLUME_PERCENT:-100}%"
 
+# Load app environment, overriding HOME and USER
+# https://www.freedesktop.org/software/systemd/man/systemd.exec.html
+cat /etc/docker.env | egrep -v "^HOME|^USER" > /app/environment.env
+echo "HOME=/data/" >> /app/environment.env
+echo "USER=${APP_USER}" >> /app/environment.env
 
 # apcupsd
 sed -e '/ISCONFIGURED/ s/^#*/#/' -i /etc/default/apcupsd
