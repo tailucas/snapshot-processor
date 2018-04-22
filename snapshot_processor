@@ -17,7 +17,7 @@ import time
 import umsgpack
 import zmq
 
-from ConfigParser import ConfigParser
+from configparser import ConfigParser
 
 import abc
 import gammu.smsd
@@ -36,15 +36,14 @@ from pydrive.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
 from pygtail import Pygtail
 from raven import Client as Sentry
-from sets import Set
 from socket import error as socket_error
 from subprocess import PIPE, Popen
-from Queue import Queue, Empty
+from queue import Queue, Empty
 from threading import Thread, Timer
 from time import sleep
 from umsgpack import UnpackException
-from urllib import pathname2url
-from urllib2 import URLError
+from urllib.request import pathname2url
+from urllib.error import URLError
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated
@@ -118,7 +117,7 @@ def parse_datetime(value=None, as_tz=pytz.utc):
     timestamp = datetime.utcnow().replace(tzinfo=as_tz)
     if value is None:
         return timestamp
-    if isinstance(value, basestring):
+    if isinstance(value, str):
         try:
             timestamp = dateutil.parser.parse(value)
             log.debug('Parsed timestamp is {}'.format(timestamp))
@@ -186,7 +185,7 @@ class Uploader(Thread):
             timestamp = datetime.utcfromtimestamp(timestamp).replace(tzinfo=pytz.utc)
         if isinstance(timestamp, datetime):
             timestamp = timestamp.strftime(DATE_FORMAT)
-        if not isinstance(timestamp, basestring):
+        if not isinstance(timestamp, str):
             log.warn('Non-string timestamp {} for payload {}'.format(timestamp, data))
         payload['timestamp'] = timestamp
         if data is not None and len(data) > 0:
@@ -302,9 +301,7 @@ class FileType(object):
 filetype = None
 
 
-class Notification(object):
-    __metaclass__ = abc.ABCMeta
-
+class Notification(object, metaclass=abc.ABCMeta):
     def __init__(self, message):
         self.message = message
 
@@ -361,7 +358,7 @@ class Notifier(Thread):
         # get current stdout flags
         flags = fcntl(self.player.stdout, F_GETFL)
         fcntl(self.player.stdout, F_SETFL, flags | O_NONBLOCK)
-        print >>self.player.stdin, 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
+        print('loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound'))), file=self.player.stdin)
         while True:
             notification = None
             try:
@@ -377,7 +374,7 @@ class Notifier(Thread):
             if isinstance(notification, TTSNotification):
                 try:
                     self.say(str(notification))
-                except StandardError:
+                except Exception:
                     log.exception("Unable to say message: '{}'".format(notification))
                     self.play_file(os.path.join(TTS_DIR, self.tts_default_sound_file))
             elif isinstance(notification, SMSNotification):
@@ -392,18 +389,18 @@ class Notifier(Thread):
     def stop(self):
         if self.player:
             try:
-                print >>self.player.stdin, 'quit'
+                print('quit', file=self.player.stdin)
             except Exception:
                 self.player.kill()
 
     def play_file(self, sound_file):
         if self.player:
-            print >>self.player.stdin, 'loadfile {}'.format(sound_file)
+            print('loadfile {}'.format(sound_file), file=self.player.stdin)
             # delay for at least 1 second for short tones
             sleep(1)
             while True:
                 # request the currently playing file
-                print >>self.player.stdin, 'get_file_name'
+                print('get_file_name', file=self.player.stdin)
                 sleep(1)
                 try:
                     sound_file_playing = self.player.stdout.readline()
@@ -464,7 +461,7 @@ class Notifier(Thread):
             log.debug("Saying '{}'...".format(message))
             self.play_file(tts_path)
         else:
-            raise StandardError('No file {} to play "{}"'.format(tts_path, message))
+            raise Exception('No file {} to play "{}"'.format(tts_path, message))
 
     def send_sms(self, recipient, message, flash=False):
         self.sms_provider.send_sms(recipient=recipient, message=message, flash=flash)
@@ -506,7 +503,7 @@ class DeviceEvent(object):
 
     @timestamp.setter
     def timestamp(self, value):
-        if isinstance(value, basestring):
+        if isinstance(value, str):
             try:
                 self._timestamp = dateutil.parser.parse(value)
                 log.debug('Parsed timestamp is {}'.format(self._timestamp))
@@ -560,9 +557,7 @@ class DeviceEvent(object):
         return self._device_key
 
 
-class CloudStorage(object):
-    __metaclass__ = abc.ABCMeta
-
+class CloudStorage(object, metaclass=abc.ABCMeta):
     @abc.abstractproperty
     def cloud_storage_url(self):
         return NotImplemented
@@ -827,14 +822,14 @@ class UploadEventHandler(FileSystemEventHandler):
         )
 
     def _get_device_event(self, event_directory):
-        for image_dir, device_event in self.device_events.items():
+        for image_dir, device_event in list(self.device_events.items()):
             if image_dir in event_directory:
                 return copy.copy(device_event)
         return None
 
     @property
     def watched_dirs(self):
-        return self.device_events.keys()
+        return list(self.device_events.keys())
 
     # we listen to on-modified events because the file is
     # created and then written to subsequently.
@@ -965,9 +960,7 @@ class ApcEventTailer(LogTailer):
         return device_event
 
 
-class SMSProvider(object):
-    __metaclass__ = abc.ABCMeta
-
+class SMSProvider(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def send_sms(self, recipient, message, flash):
         return NotImplemented
@@ -1125,7 +1118,7 @@ def thread_nanny(threads_tracked, signal_handler):
         # kill the nanny now
         if signal_handler.last_signal == signal.SIGTERM:
             break
-        threads_alive = Set()
+        threads_alive = set()
         for thread_info in threading.enumerate():
             if thread_info.isAlive():
                 threads_alive.add(thread_info.getName())
@@ -1158,7 +1151,7 @@ if __name__ == "__main__":
     output_types = dict(config.items('output_type'))
     device_info = dict()
     device_info['inputs'] = list()
-    for field, input_type in input_types.items():
+    for field, input_type in list(input_types.items()):
         input_location = input_locations[field]
         device_key = '{} {}'.format(input_locations[field], input_type)
         device_info['inputs'].append({
@@ -1180,7 +1173,7 @@ if __name__ == "__main__":
                 log_label='apcupsd',
                 log_path=config.get('logged_events', 'apcupsd'))
     device_info['outputs'] = list()
-    for field, output_type in output_types.items():
+    for field, output_type in list(output_types.items()):
         device_info['outputs'].append({
             'type': output_type,
             'device_key': output_type
@@ -1188,7 +1181,7 @@ if __name__ == "__main__":
     log.debug('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # threads that we want to ensure are alive
-    threads_tracked = Set()
+    threads_tracked = set()
     uploader = Uploader()
     uploader.start()
     threads_tracked.add(uploader.getName())

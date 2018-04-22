@@ -105,7 +105,7 @@ fi
 
 # log archival (no tee for secrets)
 if [ -d /var/awslogs/etc/ ]; then
-  cat /var/awslogs/etc/aws.conf | python /app/config_interpol /app/config/aws.conf > /var/awslogs/etc/aws.conf.new
+  cat /var/awslogs/etc/aws.conf | /app/config_interpol /app/config/aws.conf > /var/awslogs/etc/aws.conf.new
   mv /var/awslogs/etc/aws.conf /var/awslogs/etc/aws.conf.backup
   mv /var/awslogs/etc/aws.conf.new /var/awslogs/etc/aws.conf
 fi
@@ -134,7 +134,7 @@ chmod a-w "${FTP_ROOT}"
 
 echo "${FTP_USER}:${FTP_PASSWORD}" | chpasswd
 
-cat /etc/vsftpd.conf | python /app/config_interpol /app/config/vsftpd.conf | sort | tee /etc/vsftpd.conf.new
+cat /etc/vsftpd.conf | /app/config_interpol /app/config/vsftpd.conf | sort | tee /etc/vsftpd.conf.new
 mv /etc/vsftpd.conf /etc/vsftpd.conf.backup
 mv /etc/vsftpd.conf.new /etc/vsftpd.conf
 # secure_chroot_dir
@@ -156,7 +156,7 @@ fi
 export SUB_SRC="$(python /app/resin --get-devices | grep -v "$ETH0_IP" | paste -d, -s)" || [ -n "${SUB_SRC:-}" ]
 echo "$SUB_SRC" > "$SUB_CACHE"
 # application configuration (no tee for secrets)
-cat /app/config/app.conf | python /app/config_interpol > "/app/${APP_NAME}.conf"
+cat /app/config/app.conf | /app/config_interpol > "/app/${APP_NAME}.conf"
 unset ETH0_IP
 unset SUB_SRC
 
@@ -196,7 +196,7 @@ sudo ln -fs /opt/vc/lib/libbcm_host.so /usr/lib/libbcm_host.so
 # systemd configuration
 for systemdsvc in app; do
   if [ ! -e "/etc/systemd/system/${systemdsvc}.service" ]; then
-    cat "/app/config/systemd.${systemdsvc}.service" | python /app/config_interpol | tee "/etc/systemd/system/${systemdsvc}.service"
+    cat "/app/config/systemd.${systemdsvc}.service" | /app/config_interpol | tee "/etc/systemd/system/${systemdsvc}.service"
     chmod 664 "/etc/systemd/system/${systemdsvc}.service"
     systemctl daemon-reload
     systemctl enable "${systemdsvc}"
