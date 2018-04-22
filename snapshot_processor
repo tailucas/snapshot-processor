@@ -4,6 +4,7 @@ import hashlib
 import logging
 import logging.handlers
 
+import boto3
 import copy
 import json
 import os
@@ -376,6 +377,7 @@ class Notifier(Thread):
                     self.say(str(notification))
                 except Exception:
                     log.exception("Unable to say message: '{}'".format(notification))
+                    sentry.captureException()
                     self.play_file(os.path.join(TTS_DIR, self.tts_default_sound_file))
             elif isinstance(notification, SMSNotification):
                 self.send_sms(recipient=notification.recipient,
@@ -875,6 +877,7 @@ class UploadEventHandler(FileSystemEventHandler):
                         log.warn("Ignored unmapped path event: {}".format(snapshot_path))
                 except Exception:
                     log.exception('Cannot process {}'.format(snapshot_path))
+                    sentry.captureException()
                     sleep(1)
 
 
@@ -920,6 +923,7 @@ class LogTailer(Thread):
                 break
             except Exception:
                 log.exception(self.log_path)
+                sentry.captureException()
                 sleep(1)
                 continue
 
@@ -1092,6 +1096,21 @@ class ClickatellSMSProvider(SMSProvider):
             log.exception('Cannot SMS {}: {}'.format(recipient, message))
 
 
+class SNSSMSProvider(SMSProvider):
+
+    def __init__(self):
+        super(SNSSMSProvider, self).__init__()
+        self.sns = boto3.cient('sns')
+
+    def send_sms(self, recipient, message, flash):
+        try:
+            resp = self.sns.publish(PhoneNumber=recipient, Message=message)
+            log.debug('SMS sent: {}'.format(str(resp)))
+        except Exception:
+            log.exception('Cannot SMS {}: {}'.format(recipient, message))
+            sentry.captureException()
+
+
 class SignalHandler:
 
     def __init__(self):
@@ -1196,6 +1215,8 @@ if __name__ == "__main__":
         threads_tracked.add(sms_provider.getName())
     elif sms_method == 'clickatell':
         sms_provider = ClickatellSMSProvider()
+    elif sms_method == 'sns':
+        sms_provider = SNSSMSProvider()
     else:
         raise RuntimeError('Unknown SMS method specified: {}'.format(sms_method))
     # application threads
