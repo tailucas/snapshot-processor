@@ -82,7 +82,7 @@ if [ -e "$HN_CACHE" ]; then
   fi
 fi
 # refresh the device name and bail unless cached
-export DEVICE_NAME="$(python /app/resin --get-device-name)" || [ -n "${DEVICE_NAME:-}" ]
+export DEVICE_NAME="$(/app/resin --get-device-name)" || [ -n "${DEVICE_NAME:-}" ]
 echo "$DEVICE_NAME" > "$HN_CACHE"
 echo "$DEVICE_NAME" > /etc/hostname
 # apply the new hostname
@@ -153,7 +153,7 @@ if [ -e "$SUB_CACHE" ]; then
   export SUB_SRC="$(cat "$SUB_CACHE")"
 fi
 # get the latest sources and bail unless cached
-export SUB_SRC="$(python /app/resin --get-devices | grep -v "$ETH0_IP" | paste -d, -s)" || [ -n "${SUB_SRC:-}" ]
+export SUB_SRC="$(/app/resin --get-devices | grep -v "$ETH0_IP" | paste -d, -s)" || [ -n "${SUB_SRC:-}" ]
 echo "$SUB_SRC" > "$SUB_CACHE"
 # application configuration (no tee for secrets)
 cat /app/config/app.conf | /app/config_interpol > "/app/${APP_NAME}.conf"
