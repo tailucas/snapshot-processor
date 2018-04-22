@@ -9,7 +9,6 @@ import copy
 import json
 import os
 import pytz
-import re
 import requests
 import signal
 import sys
@@ -21,10 +20,8 @@ import zmq
 from configparser import ConfigParser
 
 import abc
-import gammu.smsd
 from clickatell.api import Clickatell
 from clickatell.errors import ClickatellError
-from clickatell import constants as cc
 from datetime import datetime, timedelta
 from dateutil import tz
 from fcntl import fcntl, F_GETFL, F_SETFL
@@ -39,10 +36,8 @@ from pygtail import Pygtail
 from raven import Client as Sentry
 from socket import error as socket_error
 from subprocess import PIPE, Popen
-from queue import Queue, Empty
-from threading import Thread, Timer
+from threading import Thread
 from time import sleep
-from umsgpack import UnpackException
 from urllib.request import pathname2url
 from urllib.error import URLError
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
@@ -970,115 +965,6 @@ class SMSProvider(object, metaclass=abc.ABCMeta):
         return NotImplemented
 
 
-class GammuSMSProvider(Thread, FileSystemEventHandler, SMSProvider):
-
-    def __init__(self, fs_observer):
-        super(GammuSMSProvider, self).__init__()
-        self.name = self.__class__.__name__
-        self.daemon = True
-
-        self.notifier = zmq_context.socket(zmq.PUSH)
-
-        gammu_cfg_file = config.get('sms', 'gammu-smsdrc')
-        self.smsd = gammu.smsd.SMSD(gammu_cfg_file)
-        gammu_cfg = ConfigParser()
-        gammu_cfg.optionxform = str
-        gammu_cfg.read(gammu_cfg_file)
-
-        balance_pattern = config.get('gammu', 'balance_pattern')
-        self.balance_pattern = re.compile(balance_pattern)
-        sms_balance_pattern = config.get('gammu', 'sms_balance_pattern')
-        self.sms_balance_pattern = re.compile(sms_balance_pattern)
-        log.debug("Matching SMS balance checks on patterns: '{}', '{}'".format(balance_pattern, sms_balance_pattern))
-        self.sms_balance_check_number = config.get('gammu', 'balance_check_number')
-        self.sms_balance_check_message = config.get('gammu', 'balance_check_message')
-        self.balance_value_alert = float(config.get('gammu', 'balance_value_alert'))
-        self.sms_balance_value_alert = int(config.get('gammu', 'sms_balance_value_alert'))
-
-        self.inbox_path = gammu_cfg.get('smsd', 'inboxpath')
-        self.error_path = gammu_cfg.get('smsd', 'errorsmspath')
-
-        # register the spool directories
-        for dir in self.spool_directories:
-            fs_observer.schedule(self, dir)
-
-    @property
-    def spool_directories(self):
-        return (self.inbox_path, self.error_path)
-
-    def send_sms(self, recipient, message, flash):
-        sms_class = 1
-        if flash:
-            sms_class = 0
-        message = {
-            'Text': message,
-            'SMSC': {'Location': 1},
-            'Number': recipient,
-            'Class': sms_class
-        }
-        self.smsd.InjectSMS([message])
-
-    def run(self):
-        # inbound notifications
-        self.notifier.connect(URL_WORKER_NOTIFIER)
-        while True:
-            log.info("Dispatching SMS balance enquiry '{}' to {}".format(
-                self.sms_balance_check_message,
-                self.sms_balance_check_number))
-            self.send_sms(recipient=self.sms_balance_check_number, message=self.sms_balance_check_message, flash=False)
-            # sleep until later
-            sleep(60*60*24)
-
-    # we listen to on-modified events because the file is
-    # created and then written to subsequently.
-    def on_modified(self, event):
-        """
-        :type event: FileModifiedEvent
-        """
-        super(GammuSMSProvider, self).on_modified(event)
-        # the file has been written to and has valid content
-        if not event.is_directory:
-            if self.inbox_path in event.src_path:
-                log.info('Incoming SMS at {}'.format(event.src_path))
-                for line in open(event.src_path):
-                    # log the line
-                    log.info(line)
-                    balance_response = self.balance_pattern.search(line)
-                    topup_needed = False
-                    notification_message = ''
-                    if balance_response:
-                        balance_value = float(balance_response.group(0))
-                        if balance_value <= self.balance_value_alert:
-                            log.warn('Prepaid balance has reached {}. '.format(balance_value))
-                            notification_message += "Prepaid balance is running low. "
-                            topup_needed = True
-                    balance_response = self.sms_balance_pattern.search(line)
-                    if balance_response:
-                        balance_value = int(balance_response.group(0))
-                        if balance_value <= self.sms_balance_value_alert:
-                            log.warn('SMS balance has reached {}. '.format(balance_value))
-                            notification_message += "SMS balance is running low. "
-                            topup_needed = True
-                    if topup_needed:
-                        notification_message += 'Top-up soon.'
-                    if len(notification_message) > 0:
-                        self.notifier.send_pyobj(TTSNotification(message=notification_message))
-                    else:
-                        # something more generic
-                        pass
-            elif self.error_path in event.src_path:
-                log.warn('SMS error at {}'.format(event.src_path))
-                try:
-                    self.notifier.send_pyobj(TTSNotification(message="SMS fault!"))
-                except ContextTerminated:
-                    self.notifier.close()
-                    return
-            else:
-                log.warn('Unsupported SMS event path: {}'.format(event.src_path))
-                # some other path that is unsupported
-                pass
-
-
 class ClickatellSMSProvider(SMSProvider):
 
     def __init__(self):
@@ -1208,12 +1094,7 @@ if __name__ == "__main__":
     filetype = FileType()
     # sms
     sms_method = config.get('sms', 'method')
-    if sms_method == 'gammu':
-        sms_provider = GammuSMSProvider(fs_observer=observer)
-        # Since GammuSMSProvider is a Thread
-        sms_provider.start()
-        threads_tracked.add(sms_provider.getName())
-    elif sms_method == 'clickatell':
+    if sms_method == 'clickatell':
         sms_provider = ClickatellSMSProvider()
     elif sms_method == 'sns':
         sms_provider = SNSSMSProvider()
