@@ -26,7 +26,6 @@ from dateutil import tz
 from fcntl import fcntl, F_GETFL, F_SETFL
 from mimetypes import MimeTypes
 from os import O_NONBLOCK
-from pprint import pprint
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
@@ -42,9 +41,6 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated
 
-# unbuffered STDOUT for print
-sys.stdout = os.fdopen(sys.stdout.fileno(), 'wb', 0)
-sys.displayhook = pprint
 
 APP = os.path.basename(__file__)
 DIR = os.path.abspath(os.path.dirname(__file__))
