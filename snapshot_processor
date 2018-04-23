@@ -20,8 +20,7 @@ import zmq
 from configparser import ConfigParser
 
 import abc
-from clickatell.api import Clickatell
-from clickatell.errors import ClickatellError
+from clickatell.http import Http as ClickatellHttp
 from datetime import datetime, timedelta
 from dateutil import tz
 from fcntl import fcntl, F_GETFL, F_SETFL
@@ -39,7 +38,6 @@ from subprocess import PIPE, Popen
 from threading import Thread
 from time import sleep
 from urllib.request import pathname2url
-from urllib.error import URLError
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated
@@ -972,14 +970,15 @@ class ClickatellSMSProvider(SMSProvider):
         user = config.get('clickatell', 'user')
         password = config.get('clickatell', 'password')
         app_id = config.get('clickatell', 'app-id')
-        self.clickatell = Clickatell(user, password, app_id)
+        self.clickatell = ClickatellHttp(user, password, app_id)
 
     def send_sms(self, recipient, message, flash):
         try:
-            [resp] = self.clickatell.sendmsg(recipients=[recipient], text=message)
+            [resp] = self.clickatell.sendMessage([recipient], message)
             log.debug('SMS sent: {}'.format(str(resp)))
-        except (ClickatellError, URLError):
+        except Exception:
             log.exception('Cannot SMS {}: {}'.format(recipient, message))
+            sentry.captureException()
 
 
 class SNSSMSProvider(SMSProvider):

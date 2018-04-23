@@ -1,9 +1,9 @@
 PyDrive
 argparse
 boto3
+clickatell
 pathtools
 pygtail
-python-clickatell
 python-dateutil
 python-magic
 pytz
