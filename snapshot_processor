@@ -24,6 +24,7 @@ from clickatell.http import Http as ClickatellHttp
 from datetime import datetime, timedelta
 from dateutil import tz
 from fcntl import fcntl, F_GETFL, F_SETFL
+from io import TextIOWrapper
 from mimetypes import MimeTypes
 from os import O_NONBLOCK
 from pydrive.auth import GoogleAuth
@@ -342,18 +343,36 @@ class Notifier(Thread):
         self.tts_url = '/'.join([tts_api_cfg['credentials']['url'], 'v1/synthesize'])
         self.tts_auth = (tts_api_cfg['credentials']['username'],
                          tts_api_cfg['credentials']['password'])
+        self.player_stdin = None
 
     def run(self):
         self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, bufsize=1)
         # get current stdout flags
         flags = fcntl(self.player.stdout, F_GETFL)
         fcntl(self.player.stdout, F_SETFL, flags | O_NONBLOCK)
-        loadfile_command = 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
-        self.player.stdin.writelines([loadfile_command.encode('UTF-8')])
+        self.player_stdin = TextIOWrapper(self.player.stdin, 'utf-8')
+        self.player_stdin.writelines([
+            'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
+        ])
         while True:
             notification = None
             try:
                 notification = self.socket.recv_pyobj()
+                if isinstance(notification, TTSNotification):
+                    try:
+                        self.say(str(notification))
+                    except Exception:
+                        log.exception("Unable to say message: '{}'".format(notification))
+                        sentry.captureException()
+                        self.play_file(os.path.join(TTS_DIR, self.tts_default_sound_file))
+                elif isinstance(notification, SMSNotification):
+                    self.send_sms(recipient=notification.recipient,
+                                  message=notification.message,
+                                  flash=notification.flash)
+                elif isinstance(notification, AudioNotification):
+                    self.play_file(notification.message)
+                else:
+                    log.error('Unknown notification type {}'.format(notification.__class__))
             except ContextTerminated:
                 self.socket.close()
                 break
@@ -362,47 +381,32 @@ class Notifier(Thread):
                 sentry.captureException()
                 sleep(1)
                 continue
-            if isinstance(notification, TTSNotification):
-                try:
-                    self.say(str(notification))
-                except Exception:
-                    log.exception("Unable to say message: '{}'".format(notification))
-                    sentry.captureException()
-                    self.play_file(os.path.join(TTS_DIR, self.tts_default_sound_file))
-            elif isinstance(notification, SMSNotification):
-                self.send_sms(recipient=notification.recipient,
-                              message=notification.message,
-                              flash=notification.flash)
-            elif isinstance(notification, AudioNotification):
-                self.play_file(notification.message)
-            else:
-                log.error('Unknown notification type {}'.format(notification.__class__))
 
     def stop(self):
         if self.player:
             try:
-                self.player.stdin.writelines([b'quit'])
+                self.player_stdin.writelines(['quit'])
             except Exception:
                 self.player.kill()
 
     def play_file(self, sound_file):
         if self.player:
-            loadfile_command = 'loadfile {}'.format(sound_file)
-            self.player.stdin.writelines([loadfile_command.encode('UTF-8')])
+            self.player_stdin.writelines(['loadfile {}'.format(sound_file)])
             # delay for at least 1 second for short tones
             sleep(1)
             while True:
                 # request the currently playing file
-                self.player.stdin.writelines([b'get_file_name'])
+                self.player_stdin.writelines(['get_file_name'])
                 sleep(1)
                 try:
                     sound_file_playing = self.player.stdout.readline()
                 except IOError:
                     # nothing to get
                     break
-                if not sound_file_playing or len(sound_file_playing.rstrip()) == 0:
+                if not sound_file_playing or len(sound_file_playing.decode().rstrip()) == 0:
                     break
                 ans_prefix = 'ANS_FILENAME='
+                sound_file_playing = sound_file_playing.decode()
                 if sound_file_playing.startswith(ans_prefix):
                     sound_file_playing = sound_file_playing[len(ans_prefix):].rstrip().replace("'", '')
                 if sound_file_playing == os.path.basename(sound_file):
