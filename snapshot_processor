@@ -352,7 +352,8 @@ class Notifier(Thread):
         # get current stdout flags
         flags = fcntl(self.player.stdout, F_GETFL)
         fcntl(self.player.stdout, F_SETFL, flags | O_NONBLOCK)
-        self.player.stdin.writelines(['loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))])
+        loadfile_command = 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
+        self.player.stdin.writelines([loadfile_command.encode('UTF-8')])
         while True:
             notification = None
             try:
@@ -384,18 +385,19 @@ class Notifier(Thread):
     def stop(self):
         if self.player:
             try:
-                self.player.stdin.writelines(['quit'])
+                self.player.stdin.writelines([b'quit'])
             except Exception:
                 self.player.kill()
 
     def play_file(self, sound_file):
         if self.player:
-            self.player.stdin.writelines(['loadfile {}'.format(sound_file)])
+            loadfile_command = 'loadfile {}'.format(sound_file)
+            self.player.stdin.writelines([loadfile_command.encode('UTF-8')])
             # delay for at least 1 second for short tones
             sleep(1)
             while True:
                 # request the currently playing file
-                self.player.stdin.writelines(['get_file_name'])
+                self.player.stdin.writelines([b'get_file_name'])
                 sleep(1)
                 try:
                     sound_file_playing = self.player.stdout.readline()
