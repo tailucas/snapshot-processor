@@ -466,7 +466,7 @@ class Notifier(Thread):
     @staticmethod
     def checksum(message):
         m = hashlib.md5()
-        m.update(message)
+        m.update(message.encode())
         return m.hexdigest()
 
 
@@ -774,7 +774,18 @@ class GoogleDriveUploader(GoogleDriveManager):
                 'parents': [{"kind": "drive#fileLink", "id": self._gdrive_folder_id}]
             })
             f.SetContentFile(file_path)
-            f.Upload()
+            for i in range(0, 3):
+                while True:
+                    try:
+                        f.Upload()
+                    except ApiRequestError:
+                        if i >= 3:
+                            raise
+                        else:
+                            log.warn("Problem uploading '{}' to Google Drive. Retrying...".format(file_path), exc_info=True)
+                            sleep(1)
+                            continue
+                    break
             link_msg = ""
             if 'thumbnailLink'in f:
                 link = f['thumbnailLink']
