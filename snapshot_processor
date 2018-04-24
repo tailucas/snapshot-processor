@@ -24,6 +24,7 @@ from clickatell.http import Http as ClickatellHttp
 from datetime import datetime, timedelta
 from dateutil import tz
 from fcntl import fcntl, F_GETFL, F_SETFL
+from httplib import BadStatusLine
 from io import TextIOWrapper
 from mimetypes import MimeTypes
 from os import O_NONBLOCK
@@ -778,7 +779,7 @@ class GoogleDriveUploader(GoogleDriveManager):
                 while True:
                     try:
                         f.Upload()
-                    except ApiRequestError:
+                    except (ApiRequestError, BadStatusLine):
                         if i >= 3:
                             raise
                         else:
