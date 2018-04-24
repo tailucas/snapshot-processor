@@ -168,26 +168,26 @@ class Uploader(Thread):
                 sleep(1)
                 continue
 
-        @staticmethod
-        def make_timestamp(timestamp=None, make_string=False):
-            if timestamp is None:
-                timestamp = datetime.utcnow()
-            elif isinstance(timestamp, float):
-                timestamp = datetime.utcfromtimestamp(timestamp)
-            elif isinstance(timestamp, str):
-                timestamp = dateutil.parser.parse(timestamp)
-            if make_string:
-                return timestamp.strftime(DATE_FORMAT)
-            # not naive datetime
-            return timestamp.replace(tzinfo=pytz.utc)
+    @staticmethod
+    def make_timestamp(timestamp=None, make_string=False):
+        if timestamp is None:
+            timestamp = datetime.utcnow()
+        elif isinstance(timestamp, float):
+            timestamp = datetime.utcfromtimestamp(timestamp)
+        elif isinstance(timestamp, str):
+            timestamp = dateutil.parser.parse(timestamp)
+        if make_string:
+            return timestamp.strftime(DATE_FORMAT)
+        # not naive datetime
+        return timestamp.replace(tzinfo=pytz.utc)
 
-        @staticmethod
-        def make_payload(timestamp=None, data=None):
-            payload = {'timestamp': make_timestamp(timestamp, True)}
-            if data is not None and len(data) > 0:
-                payload['data'] = data
-            log.debug(json.dumps(payload))
-            return umsgpack.packb(payload)
+    @staticmethod
+    def make_payload(timestamp=None, data=None):
+        payload = {'timestamp': make_timestamp(timestamp, True)}
+        if data is not None and len(data) > 0:
+            payload['data'] = data
+        log.debug(json.dumps(payload))
+        return umsgpack.packb(payload)
 
 
 class DeviceActivator(Thread):
