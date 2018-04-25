@@ -23,11 +23,8 @@ import abc
 from clickatell.http import Http as ClickatellHttp
 from datetime import datetime, timedelta
 from dateutil import tz
-from fcntl import fcntl, F_GETFL, F_SETFL
 from http.client import BadStatusLine
-from io import TextIOWrapper
 from mimetypes import MimeTypes
-from os import O_NONBLOCK
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
@@ -348,18 +345,13 @@ class Notifier(Thread):
         self.tts_url = '/'.join([tts_api_cfg['credentials']['url'], 'v1/synthesize'])
         self.tts_auth = (tts_api_cfg['credentials']['username'],
                          tts_api_cfg['credentials']['password'])
-        self.player_stdin = None
 
     def run(self):
         try:
             self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, bufsize=1)
             # get current stdout flags
-            flags = fcntl(self.player.stdout, F_GETFL)
-            fcntl(self.player.stdout, F_SETFL, flags | O_NONBLOCK)
-            self.player_stdin = TextIOWrapper(self.player.stdin, 'utf-8')
-            self.player_stdin.writelines([
-                'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
-            ])
+            mplayer_init_file = 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
+            self.player.communicate(mplayer_init_file.encode())
         except Exception:
             log.exception(self.__class__.__name__)
             sentry.captureException()
@@ -397,24 +389,18 @@ class Notifier(Thread):
     def stop(self):
         if self.player:
             try:
-                self.player_stdin.writelines(['quit'])
+                self.player.communicate('quit'.encode())
             except Exception:
                 self.player.kill()
 
     def play_file(self, sound_file):
         if self.player:
-            self.player_stdin.writelines(['loadfile {}'.format(sound_file)])
+            self.player.communicate('loadfile {}'.format(sound_file).encode())
             # delay for at least 1 second for short tones
             sleep(1)
             while True:
                 # request the currently playing file
-                self.player_stdin.writelines(['get_file_name'])
-                sleep(1)
-                try:
-                    sound_file_playing = self.player.stdout.readline()
-                except IOError:
-                    # nothing to get
-                    break
+                sound_file_playing, _ = self.player.communicate('get_file_name'.encode())
                 if not sound_file_playing or len(sound_file_playing.decode().rstrip()) == 0:
                     break
                 ans_prefix = 'ANS_FILENAME='
