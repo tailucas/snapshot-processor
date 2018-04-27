@@ -348,10 +348,10 @@ class Notifier(Thread):
 
     def run(self):
         try:
-            self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, bufsize=1)
+            self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, universal_newlines=True, bufsize=1)
             # get current stdout flags
             mplayer_init_file = 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
-            self.player.communicate(mplayer_init_file.encode())
+            self.player.communicate(mplayer_init_file + os.linesep)
         except Exception:
             log.exception(self.__class__.__name__)
             sentry.captureException()
@@ -389,18 +389,18 @@ class Notifier(Thread):
     def stop(self):
         if self.player:
             try:
-                self.player.communicate('quit'.encode())
+                self.player.communicate('quit' + os.linesep)
             except Exception:
                 self.player.kill()
 
     def play_file(self, sound_file):
         if self.player:
-            self.player.communicate('loadfile {}'.format(sound_file).encode())
+            self.player.communicate('loadfile {}'.format(sound_file) + os.linesep)
             # delay for at least 1 second for short tones
             sleep(1)
             while True:
                 # request the currently playing file
-                sound_file_playing, _ = self.player.communicate('get_file_name'.encode())
+                sound_file_playing, _ = self.player.communicate('get_file_name' + os.linesep)
                 if not sound_file_playing or len(sound_file_playing.decode().rstrip()) == 0:
                     break
                 ans_prefix = 'ANS_FILENAME='
