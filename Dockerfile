@@ -24,6 +24,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     libffi-dev \
     libraspberrypi-bin \
     libssl-dev \
+    libzmq3-dev \
     lsof \
     man-db \
     manpages \
