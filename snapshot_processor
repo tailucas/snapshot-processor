@@ -17,6 +17,9 @@ import time
 import umsgpack
 import zmq
 
+from fcntl import fcntl, F_GETFL, F_SETFL
+from os import O_NONBLOCK, read
+
 from configparser import ConfigParser
 
 import abc
@@ -349,9 +352,12 @@ class Notifier(Thread):
     def run(self):
         try:
             self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, universal_newlines=True, bufsize=1)
+            # set the O_NONBLOCK flag of stdout file descriptor:
+            flags = fcntl(self.player.stdout, F_GETFL)  # get current stdout flags
+            fcntl(self.player.stdout, F_SETFL, flags | O_NONBLOCK)
             # get current stdout flags
             mplayer_init_file = 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
-            self.player.communicate(mplayer_init_file + os.linesep)
+            self.player.stdin.write(mplayer_init_file + os.linesep)
         except Exception:
             log.exception(self.__class__.__name__)
             sentry.captureException()
@@ -389,18 +395,23 @@ class Notifier(Thread):
     def stop(self):
         if self.player:
             try:
-                self.player.communicate('quit' + os.linesep)
+                self.player.stdin.write('quit' + os.linesep)
             except Exception:
                 self.player.kill()
 
     def play_file(self, sound_file):
         if self.player:
-            self.player.communicate('loadfile {}'.format(sound_file) + os.linesep)
+            self.player.stdin.write('loadfile {}'.format(sound_file) + os.linesep)
             # delay for at least 1 second for short tones
             sleep(1)
             while True:
+                self.player.stdin.write('get_file_name' + os.linesep)
+                sleep(1)
+                try:
+                    sound_file_playing = read(self.player.stdout.fileno(), 1024)
+                except OSError:
+                    break
                 # request the currently playing file
-                sound_file_playing, _ = self.player.communicate('get_file_name' + os.linesep)
                 if not sound_file_playing or len(sound_file_playing.decode().rstrip()) == 0:
                     break
                 ans_prefix = 'ANS_FILENAME='
@@ -1001,7 +1012,7 @@ class SNSSMSProvider(SMSProvider):
     def send_sms(self, recipient, message, flash):
         try:
             resp = self.sns.publish(PhoneNumber=recipient, Message=message)
-            log.debug('SMS sent: {}'.format(str(resp)))
+            log.info('SMS sent: {}'.format(str(resp)))
         except Exception:
             log.exception('Cannot SMS {}: {}'.format(recipient, message))
             sentry.captureException()
