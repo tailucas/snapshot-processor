@@ -214,13 +214,13 @@ class DeviceActivator(Thread):
                 else:
                     timestamp = parse_datetime(value=None, as_tz=tz.tzlocal())
                 if 'data' not in event:
-                    log.warn('Unknown event data: {}'.format(event))
+                    log.warning('Unknown event data: {}'.format(event))
                     continue
                 event_data = event['data']
                 if 'trigger_output' in event_data:
                     output_type = event_data['trigger_output']['type']
                     if 'input_context' not in event_data:
-                        log.warn('{} requested without context, ignoring.'.format(output_type))
+                        log.warning('{} requested without context, ignoring.'.format(output_type))
                         continue
                     device_label = event_data['input_context']['device_label']
                     event_detail = ""
@@ -791,7 +791,7 @@ class GoogleDriveUploader(GoogleDriveManager):
                         if i >= 3:
                             raise
                         else:
-                            log.warn("Problem uploading '{}' to Google Drive. Retrying...".format(file_path), exc_info=True)
+                            log.warning("Problem uploading '{}' to Google Drive. Retrying...".format(file_path), exc_info=True)
                             sleep(1)
                             continue
                     break
@@ -889,7 +889,7 @@ class UploadEventHandler(FileSystemEventHandler):
                             self.cloud_storage_socket.close()
                             return
                     else:
-                        log.warn("Ignored unmapped path event: {}".format(snapshot_path))
+                        log.warning("Ignored unmapped path event: {}".format(snapshot_path))
                 except Exception:
                     log.exception('Cannot process {}'.format(snapshot_path))
                     sentry.captureException()
@@ -1026,7 +1026,7 @@ class SignalHandler:
         signal.signal(signal.SIGHUP, self.hup)
 
     def hup(self, signum, frame):
-        log.warn('Signal {} received.'.format(signum))
+        log.warning('Signal {} received.'.format(signum))
         self.last_signal = signum
         if log.getEffectiveLevel() == logging.INFO:
             log.setLevel(logging.DEBUG)
@@ -1034,7 +1034,7 @@ class SignalHandler:
             log.setLevel(logging.INFO)
 
     def terminate(self, signum, frame):
-        log.warn('Signal {} received.'.format(signum))
+        log.warning('Signal {} received.'.format(signum))
         self.last_signal = signum
         raise RuntimeWarning()
 
@@ -1062,7 +1062,7 @@ if __name__ == "__main__":
     syslog_handler.setFormatter(formatter)
     log.addHandler(syslog_handler)
     if sys.stdout.isatty():
-        log.warn("Using console logging because there is a tty.")
+        log.warning("Using console logging because there is a tty.")
         stream_handler = logging.StreamHandler(stream=sys.stdout)
         stream_handler.setFormatter(formatter)
         log.addHandler(stream_handler)
