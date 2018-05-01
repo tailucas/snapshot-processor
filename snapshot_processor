@@ -985,6 +985,15 @@ class SMSProvider(object, metaclass=abc.ABCMeta):
         return NotImplemented
 
 
+class NullSMSProvider(SMSProvider):
+
+    def __init__(self):
+        super(NullSMSProvider, self).__init__()
+
+    def send_sms(self, recipient, message, flash):
+        log.debug('NullSMSProvider does nothing with SMS to {}: {}'.format(recipient, message))
+
+
 class ClickatellSMSProvider(SMSProvider):
 
     def __init__(self):
@@ -1120,7 +1129,8 @@ if __name__ == "__main__":
     elif sms_method == 'sns':
         sms_provider = SNSSMSProvider()
     else:
-        raise RuntimeError('Unknown SMS method specified: {}'.format(sms_method))
+        log.warning('Using null SMS provider because SMS method configured to {}'.format(sms_method))
+        sms_provider = NullSMSProvider()
     # application threads
     notifier = Notifier(sms_provider=sms_provider)
     # ensure that auth is properly set up first
