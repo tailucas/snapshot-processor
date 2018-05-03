@@ -4,7 +4,6 @@ import hashlib
 import logging
 import logging.handlers
 
-import boto3
 import copy
 import json
 import os
@@ -23,7 +22,6 @@ from os import O_NONBLOCK, read
 from configparser import ConfigParser
 
 import abc
-from clickatell.http import Http as ClickatellHttp
 from datetime import datetime, timedelta
 from dateutil import tz
 from http.client import BadStatusLine
@@ -230,37 +228,6 @@ class DeviceActivator(Thread):
                     if output_type.lower() == 'tts':
                         log.info("TTS '{}'".format(notification_message))
                         self.notifier.send_pyobj(TTSNotification(message=notification_message))
-                    elif output_type.lower() == 'sms':
-                        if 'device_params' not in event_data['trigger_output']:
-                            log.error('Parameters must be configured for output type {}'.format(output_type))
-                            continue
-                        # include a timestamp in this SMS message
-                        notification_message = '{}{} ({}:{})'.format(
-                            device_label,
-                            event_detail,
-                            timestamp.hour,
-                            str(timestamp.minute).zfill(2))
-                        footer = ''
-                        # add in the callback URL
-                        if 'callback_url' in event_data:
-                            footer = "\n{}".format(event_data['callback_url'])
-                        # add in some trigger history for context
-                        if 'trigger_history' in event_data:
-                            for history_device_label, trigger_secs_ago in event_data['trigger_history']:
-                                history_info = "\n{}s ago: {}".format(trigger_secs_ago, history_device_label)
-                                if len(notification_message) + len(history_info) + len(footer) >= 160:
-                                    break
-                                notification_message += history_info
-                        notification_message += footer
-                        recipients = event_data['trigger_output']['device_params'].strip().split(',')
-                        for recipient in recipients:
-                            name_number = recipient.split(';')
-                            log.info("SMS {} ({}) '{}'".format(name_number[0], name_number[1], notification_message))
-                            self.notifier.send_pyobj(SMSNotification(
-                                message=notification_message,
-                                recipient=name_number[1],
-                                sender=None,
-                                flash=True))
                     else:
                         log.error('Unconfigured output type {} for input context {}'.format(output_type, event_data))
                         continue
@@ -328,13 +295,11 @@ class AudioNotification(Notification):
 
 class Notifier(Thread):
 
-    def __init__(self, sms_provider):
+    def __init__(self):
         super(Notifier, self).__init__(name=self.__class__.__name__)
         self.daemon = True
         # audio player wrapper
         self.player = None
-        # SMS notification provider
-        self.sms_provider = sms_provider
 
         self.socket = zmq_context.socket(zmq.PULL)
         self.socket.bind(URL_WORKER_NOTIFIER)
@@ -375,10 +340,6 @@ class Notifier(Thread):
                         log.exception("Unable to say message: '{}'".format(notification))
                         sentry.captureException()
                         self.play_file(os.path.join(TTS_DIR, self.tts_default_sound_file))
-                elif isinstance(notification, SMSNotification):
-                    self.send_sms(recipient=notification.recipient,
-                                  message=notification.message,
-                                  flash=notification.flash)
                 elif isinstance(notification, AudioNotification):
                     self.play_file(notification.message)
                 else:
@@ -468,9 +429,6 @@ class Notifier(Thread):
             self.play_file(tts_path)
         else:
             raise Exception('No file {} to play "{}"'.format(tts_path, message))
-
-    def send_sms(self, recipient, message, flash=False):
-        self.sms_provider.send_sms(recipient=recipient, message=message, flash=flash)
 
     @staticmethod
     def checksum(message):
@@ -979,54 +937,6 @@ class ApcEventTailer(LogTailer):
         return device_event
 
 
-class SMSProvider(object, metaclass=abc.ABCMeta):
-    @abc.abstractmethod
-    def send_sms(self, recipient, message, flash):
-        return NotImplemented
-
-
-class NullSMSProvider(SMSProvider):
-
-    def __init__(self):
-        super(NullSMSProvider, self).__init__()
-
-    def send_sms(self, recipient, message, flash):
-        log.debug('NullSMSProvider does nothing with SMS to {}: {}'.format(recipient, message))
-
-
-class ClickatellSMSProvider(SMSProvider):
-
-    def __init__(self):
-        super(ClickatellSMSProvider, self).__init__()
-        user = config.get('clickatell', 'user')
-        password = config.get('clickatell', 'password')
-        app_id = config.get('clickatell', 'app-id')
-        self.clickatell = ClickatellHttp(user, password, app_id)
-
-    def send_sms(self, recipient, message, flash):
-        try:
-            [resp] = self.clickatell.sendMessage([recipient], message)
-            log.debug('SMS sent: {}'.format(str(resp)))
-        except Exception:
-            log.exception('Cannot SMS {}: {}'.format(recipient, message))
-            sentry.captureException()
-
-
-class SNSSMSProvider(SMSProvider):
-
-    def __init__(self):
-        super(SNSSMSProvider, self).__init__()
-        self.sns = boto3.cient('sns')
-
-    def send_sms(self, recipient, message, flash):
-        try:
-            resp = self.sns.publish(PhoneNumber=recipient, Message=message)
-            log.info('SMS sent: {}'.format(str(resp)))
-        except Exception:
-            log.exception('Cannot SMS {}: {}'.format(recipient, message))
-            sentry.captureException()
-
-
 class SignalHandler:
 
     def __init__(self):
@@ -1122,17 +1032,8 @@ if __name__ == "__main__":
     threads_tracked.add(uploader.getName())
     # top-level types
     filetype = FileType()
-    # sms
-    sms_method = config.get('sms', 'method')
-    if sms_method == 'clickatell':
-        sms_provider = ClickatellSMSProvider()
-    elif sms_method == 'sns':
-        sms_provider = SNSSMSProvider()
-    else:
-        log.warning('Using null SMS provider because SMS method configured to {}'.format(sms_method))
-        sms_provider = NullSMSProvider()
     # application threads
-    notifier = Notifier(sms_provider=sms_provider)
+    notifier = Notifier()
     # ensure that auth is properly set up first
     google_drive_archiver = GoogleDriveArchiver(
         gauth_creds_file=config.get('gdrive', 'creds_file'),

@@ -1,7 +1,5 @@
 PyDrive
 argparse
-boto3
-clickatell
 pathtools
 pygtail
 python-dateutil
