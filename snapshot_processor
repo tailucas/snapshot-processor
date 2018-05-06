@@ -994,6 +994,7 @@ if __name__ == "__main__":
     input_types = dict(config.items('input_type'))
     input_locations = dict(config.items('input_location'))
     output_types = dict(config.items('output_type'))
+    output_locations = dict(config.items('output_location'))
     device_info = dict()
     device_info['inputs'] = list()
     for field, input_type in list(input_types.items()):
@@ -1019,10 +1020,17 @@ if __name__ == "__main__":
                 log_path=config.get('logged_events', 'apcupsd'))
     device_info['outputs'] = list()
     for field, output_type in list(output_types.items()):
-        device_info['outputs'].append({
+        output_device = {}
+        if field in output_locations:
+            device_key = '{} {}'.format(output_locations[field], input_type)
+            output_device['location'] = output_locations[field]
+        else:
+            device_key = output_type
+        output_device.update({
             'type': output_type,
-            'device_key': output_type
+            'device_key': device_key
         })
+        device_info['outputs'].append(output_device)
     log.debug('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # threads that we want to ensure are alive
