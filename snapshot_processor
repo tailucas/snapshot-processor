@@ -278,15 +278,6 @@ class TTSNotification(Notification):
         super(TTSNotification, self).__init__(message=message)
 
 
-class SMSNotification(Notification):
-
-    def __init__(self, message, recipient, sender=None, flash=False):
-        super(SMSNotification, self).__init__(message=message)
-        self.recipient = recipient
-        self.sender = sender
-        self.flash = flash
-
-
 class AudioNotification(Notification):
 
     def __init__(self, message):
