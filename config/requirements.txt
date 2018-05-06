@@ -1,7 +1,6 @@
 PyDrive
 argparse
 pathtools
-Pillow
 pygtail
 python-dateutil
 python-magic
