@@ -593,7 +593,8 @@ class GoogleDriveManager(Thread, CloudStorage):
         else:
             self._gauth_creds_file = os.path.abspath(gauth_creds_file)
         self.drive = GoogleDrive(self.gauth)
-        self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, gdrive_folder)
+        # set by the thread
+        self._gdrive_folder_id, self._gdrive_folder_url = None
 
     @property
     def cloud_storage_url(self):
@@ -668,6 +669,8 @@ class GoogleDriveArchiver(GoogleDriveManager):
         self._folder_id_cache = dict()
 
     def run(self):
+        # determine the Drive folder ID
+        self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
         while True:
             log.debug('Finding files in {} ({}) to archive.'.format(self._gdrive_folder, self._gdrive_folder_id))
             try:
@@ -758,6 +761,8 @@ class GoogleDriveUploader(GoogleDriveManager):
         self.socket.bind(URL_WORKER_CLOUD_STORAGE)
 
     def run(self):
+        # determine the Drive folder ID
+        self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
         while True:
             try:
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
@@ -1039,9 +1044,6 @@ if __name__ == "__main__":
     device_activator = DeviceActivator()
     device_activator.start()
     threads_tracked.add(device_activator.getName())
-    # start the Google Driver archiver last
-    google_drive_archiver.start()
-    threads_tracked.add(google_drive_archiver.getName())
     # app plumbing
     signal_handler = SignalHandler()
     f = threading.Thread(name='nanny', target=thread_nanny, args=(threads_tracked, signal_handler,))
@@ -1053,6 +1055,9 @@ if __name__ == "__main__":
         # startup completed
         # back to INFO logging
         log.setLevel(logging.INFO)
+        # start the Google Driver archiver last
+        google_drive_archiver.start()
+        threads_tracked.add(google_drive_archiver.getName())
         while True:
             uploader_socket.send_pyobj({
                         #TODO statistics
