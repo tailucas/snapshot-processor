@@ -1,7 +1,6 @@
 PyDrive
 argparse
 pathtools
-pygtail
 python-dateutil
 python-magic
 pytz

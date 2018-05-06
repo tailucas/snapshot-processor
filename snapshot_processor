@@ -31,7 +31,6 @@ from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
-from pygtail import Pygtail
 from raven import Client as Sentry
 from socket import error as socket_error
 from subprocess import PIPE, Popen
@@ -908,89 +907,6 @@ class UploadEventHandler(FileSystemEventHandler):
                     sleep(1)
 
 
-class LogTailer(Thread):
-
-    def __init__(self, device_key, device_type, device_location, log_label, log_path):
-        super(LogTailer, self).__init__()
-        self.name = self.__class__.__name__
-        self.daemon = True
-
-        self.device_key = device_key
-        self.device_type = device_type
-        self.device_location = device_location
-
-        self.log_label = log_label
-        self.log_path = log_path
-
-        self.log_dir = os.path.dirname(log_path)
-        self.log_file = os.path.basename(log_path)
-
-        if 'syslog' in self.log_file:
-            raise RuntimeError('Tailing syslog will result in log feedback.')
-
-        self.uploader = zmq_context.socket(zmq.PUSH)
-
-    @staticmethod
-    def _sleep():
-        #TODO: remove when Pygtail no longer spins
-        time.sleep(1)
-
-    def run(self):
-        log.info('Tailing log {} as {}'.format(self.log_path, self.log_label))
-        self.uploader.connect(URL_WORKER_UPLOADER)
-        while True:
-            try:
-                for line in Pygtail(filename=self.log_path, on_update=LogTailer._sleep):
-                    log.debug('Processing line: {}'.format(line))
-                    notification = self.process_line(line)
-                    if notification:
-                        self.uploader.send_pyobj(notification)
-            except ContextTerminated:
-                self.uploader.close()
-                break
-            except Exception:
-                log.exception(self.log_path)
-                sentry.captureException()
-                sleep(1)
-                continue
-
-    def process_line(self, log_line):
-        log.info('{}: {}'.format(self.log_label, log_line))
-        return None
-
-    def close(self):
-        self.uploader.close()
-
-
-class ApcEventTailer(LogTailer):
-
-    def __init__(self, device_key, device_type, device_location, log_label, log_path):
-        super(ApcEventTailer, self).__init__(device_key, device_type, device_location, log_label, log_path)
-
-    def process_line(self, log_line):
-        # skip this
-        if 'startup succeeded' in log_line or 'apcupsd' in log_line:
-            return None
-        log_fields = log_line.split()
-        # extract the date data
-        timestamp = ' '.join(log_fields[:3])
-        log_entry = ' '.join(log_fields[3:])
-        log.debug('{} @ {}: {}'.format(self.log_label, timestamp, log_entry))
-        # construct the device event
-        device_event = DeviceEvent(
-            device_key=self.device_key,
-            device_type=self.device_type,
-            device_location=self.device_location
-        )
-        device_event.timestamp = timestamp
-        # strip off (redundant) UPS prefix
-        ups_prefix = 'UPS '
-        if log_entry.startswith(ups_prefix):
-            log_entry = log_entry[len(ups_prefix):]
-        device_event.event_detail = log_entry
-        return device_event
-
-
 class SignalHandler:
 
     def __init__(self):
@@ -1043,7 +959,6 @@ if __name__ == "__main__":
     observer = Observer()
     observer.name = observer.__class__.__name__
     upload_event_handler = UploadEventHandler(fs_observer=observer)
-    log_tailer = None
     # construct the device representation
     input_types = dict(config.items('input_type'))
     input_locations = dict(config.items('input_location'))
@@ -1067,13 +982,6 @@ if __name__ == "__main__":
                 device_type=input_type,
                 device_location=input_location,
                 image_dir=os.path.join(config.get('snapshots', 'upload_dir'), input_location.lower()))
-        elif input_type.lower() == 'ups' and config.has_option('logged_events', 'apcupsd'):
-            log_tailer = ApcEventTailer(
-                device_key=device_key,
-                device_type=input_type,
-                device_location=input_location,
-                log_label='apcupsd',
-                log_path=config.get('logged_events', 'apcupsd'))
     device_info['outputs'] = list()
     camera_profiles = {}
     for field, output_type in list(output_types.items()):
@@ -1127,9 +1035,6 @@ if __name__ == "__main__":
     threads_tracked.add(google_drive_uploader.getName())
     observer.start()
     threads_tracked.add(observer.getName())
-    if log_tailer:
-        log_tailer.start()
-        threads_tracked.add(log_tailer.getName())
     # finish with the device activator
     device_activator = DeviceActivator()
     device_activator.start()
@@ -1159,8 +1064,6 @@ if __name__ == "__main__":
         observer.stop()
         observer.join()
         upload_event_handler.close()
-        if log_tailer:
-            log_tailer.close()
         # since this thread and the signal handler are one and the same
         uploader_socket.close()
         zmq_context.term()

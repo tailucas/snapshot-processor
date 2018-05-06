@@ -9,7 +9,6 @@ COPY ./pipstrap.py /tmp/
 RUN rm -f /etc/dpkg/dpkg.cfg.d/01_nodoc
 RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils \
-    apcupsd \
     ca-certificates \
     cron \
     cpp \
