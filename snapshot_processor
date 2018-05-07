@@ -1012,7 +1012,7 @@ if __name__ == "__main__":
                 'storage': os.path.join(snapshot_root, config.get('snapshots', 'upload_dir'), output_location.lower())
             })
             camera_profiles[device_key] = camera_profile
-    log.debug('Monitoring directories in {} for changes: {}'.format(
+    log.info('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # threads that we want to ensure are alive
     threads_tracked = set()
@@ -1037,8 +1037,6 @@ if __name__ == "__main__":
     snapshotter.start()
     threads_tracked.add(snapshotter.getName())
     # start the collectors
-    google_drive_uploader.start()
-    threads_tracked.add(google_drive_uploader.getName())
     observer.start()
     threads_tracked.add(observer.getName())
     # finish with the device activator
@@ -1056,6 +1054,9 @@ if __name__ == "__main__":
         # startup completed
         # back to INFO logging
         log.setLevel(logging.INFO)
+        # start Google Drive uploader
+        google_drive_uploader.start()
+        threads_tracked.add(google_drive_uploader.getName())
         # start the Google Driver archiver last
         google_drive_archiver.start()
         threads_tracked.add(google_drive_archiver.getName())
