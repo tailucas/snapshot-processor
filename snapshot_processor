@@ -594,7 +594,8 @@ class GoogleDriveManager(Thread, CloudStorage):
             self._gauth_creds_file = os.path.abspath(gauth_creds_file)
         self.drive = GoogleDrive(self.gauth)
         # set by the thread
-        self._gdrive_folder_id, self._gdrive_folder_url = None
+        self._gdrive_folder_id = None
+        self._gdrive_folder_url = None
 
     @property
     def cloud_storage_url(self):
