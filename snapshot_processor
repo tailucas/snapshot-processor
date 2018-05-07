@@ -186,7 +186,8 @@ class Uploader(Thread):
         payload = {'timestamp': make_timestamp(timestamp, True)}
         if data is not None and len(data) > 0:
             payload['data'] = data
-        log.debug(json.dumps(payload))
+        #TODO: fix me for small payloads
+        #log.debug(json.dumps(payload))
         return umsgpack.packb(payload)
 
 
@@ -453,6 +454,9 @@ class Snapshot(Thread):
         self.socket = zmq_context.socket(zmq.PULL)
         self.socket.bind(URL_WORKER_SNAPSHOT)
 
+        self.uploader = zmq_context.socket(zmq.PUSH)
+        self.uploader.connect(URL_WORKER_UPLOADER)
+
     def run(self):
         while True:
             try:
@@ -474,14 +478,27 @@ class Snapshot(Thread):
                     'usr': camera_auth_user,
                     'pwd': camera_auth_password,
                 })
-                im = Image.open(BytesIO(r.content))
+                image_data = r.content
+                im = Image.open(BytesIO(image_data))
                 unix_timestamp = str((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 output_filename = os.path.join(camera_profile['storage'],
                                                unix_timestamp + '.' + self.default_image_format)
+                self.uploader.send_pyobj({
+                    'active_devices': [
+                        {
+                            'device_key': device_key,
+                            'device_label': device_label,
+                            'type': 'camera',
+                            'image': image_data,
+                        }
+                    ]
+                })
                 log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
+                # persist for Cloud
                 im.save(output_filename)
             except ContextTerminated:
                 self.socket.close()
+                self.uploader.close()
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
