@@ -398,10 +398,10 @@ class Notifier(Thread):
         tts_file = '{}.{}.{}'.format(msg_checksum, self.tts_voice, self.tts_file_format)
         tts_path = os.path.join(TTS_DIR, tts_file)
         if os.path.isfile(tts_path) and os.path.getsize(tts_path) == 0:
-            log.debug('Removing empty file {}'.format(tts_path))
+            log.warning('Removing empty file {}'.format(tts_path))
             os.remove(tts_path)
         if filetype.test_type(tts_path, 'audio') is None:
-            log.debug('Removing audio file of unknown type {}'.format(tts_path))
+            log.warning('Removing audio file of unknown type {}'.format(tts_path))
             os.remove(tts_path)
         log.debug('{} exists? {}'.format(tts_path, os.path.isfile(tts_path)))
         if not os.path.isfile(tts_path):
@@ -892,6 +892,11 @@ class UploadEventHandler(FileSystemEventHandler):
         # the file has been written to and has valid content
         if not event.is_directory:
             snapshot_path = event.src_path
+            # remove empty files
+            if os.path.isfile(snapshot_path) and os.path.getsize(snapshot_path) == 0:
+                log.warning('Removing empty file {}'.format(snapshot_path))
+                os.remove(snapshot_path)
+                return
             # de-duplication
             if snapshot_path != self.last_modified:
                 self.last_modified = snapshot_path
