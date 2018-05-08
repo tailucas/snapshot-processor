@@ -131,6 +131,8 @@ done
 chown -R "${FTP_USER}:${APP_GROUP}" "${FTP_HOME}/"
 chown -R "${FTP_USER}:${APP_GROUP}" "${STORAGE_ROOT}/"
 chmod a-w "${FTP_ROOT}"
+# allow all in the same group to write
+chmod -R g+w "${FTP_ROOT}"
 
 echo "${FTP_USER}:${FTP_PASSWORD}" | chpasswd
 
