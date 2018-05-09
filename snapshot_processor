@@ -542,7 +542,7 @@ class DeviceEvent(object):
                 self._timestamp = dateutil.parser.parse(value)
                 log.debug('Parsed timestamp is {}'.format(self._timestamp))
             except ValueError:
-                log.exception("Cannot parse date-like string {}. Defaulting to '{}'.".format(value, self.timestamp))
+                log.warning("Cannot parse date-like string {}. Defaulting to '{}'.".format(value, self.timestamp))
                 return
         elif isinstance(value, datetime):
             self._timestamp = value
