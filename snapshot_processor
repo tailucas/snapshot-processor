@@ -33,6 +33,7 @@ from pydrive.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
 from raven import Client as Sentry
 from socket import error as socket_error
+from ssl import SSLEOFError
 from subprocess import PIPE, Popen
 from threading import Thread
 from time import sleep
@@ -821,7 +822,7 @@ class GoogleDriveUploader(GoogleDriveManager):
                 while True:
                     try:
                         f.Upload()
-                    except (ApiRequestError, BadStatusLine):
+                    except (ApiRequestError, BadStatusLine, SSLEOFError):
                         if i >= 3:
                             raise
                         else:
