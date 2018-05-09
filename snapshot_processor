@@ -482,6 +482,7 @@ class Snapshot(Thread):
                 im = Image.open(BytesIO(image_data))
                 unix_timestamp = str((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 output_filename = os.path.join(camera_profile['storage'],
+                                               '_fetch_',
                                                unix_timestamp + '.' + self.default_image_format)
                 self.uploader.send_pyobj({
                     'active_devices': [
@@ -917,8 +918,10 @@ class UploadEventHandler(FileSystemEventHandler):
                             date_string = file_base_name
                         device_event.timestamp = date_string
                         try:
-                            self.uploader.send_pyobj(device_event)
-                            # upload the image snapshot
+                            # do not notify for fetched image data
+                            if 'fetch' not in snapshot_path:
+                                self.uploader.send_pyobj(device_event)
+                            # upload the image snapshot to Cloud
                             self.cloud_storage_socket.send_pyobj((
                                 snapshot_path,
                                 device_event.timestamp
