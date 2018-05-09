@@ -482,8 +482,7 @@ class Snapshot(Thread):
                 im = Image.open(BytesIO(image_data))
                 unix_timestamp = str((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 output_filename = os.path.join(camera_profile['storage'],
-                                               '_fetch_',
-                                               unix_timestamp + '.' + self.default_image_format)
+                                               'fetch_' + unix_timestamp + '.' + self.default_image_format)
                 self.uploader.send_pyobj({
                     'active_devices': [
                         {
