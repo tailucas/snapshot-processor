@@ -782,7 +782,6 @@ class GoogleDriveUploader(GoogleDriveManager):
 
         # determine the Drive folder details synchronously
         self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
-        log.info("Google Drive folder '{}' is at {}".format(self._gdrive_folder_id, self._gdrive_folder_url))
 
     def run(self):
         while True:
