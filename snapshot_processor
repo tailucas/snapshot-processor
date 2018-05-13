@@ -163,14 +163,7 @@ class Uploader(Thread):
                                                   port=config.get('zmq', 'pubsub_port')))
         while True:
             try:
-                event = self.inproc_pull.recv_pyobj()
-                timestamp = None
-                # drop
-                if isinstance(event, DeviceEvent):
-                    timestamp = event.timestamp_string
-                    event_data = {'active_devices': [event.dict]}
-                else:
-                    event_data = event
+                (timestamp, event_data) = self.inproc_pull.recv_pyobj()
                 publisher.send(Uploader.make_payload(timestamp, event_data))
             except ContextTerminated:
                 self.inproc_pull.close()
@@ -484,16 +477,19 @@ class Snapshot(Thread):
                 unix_timestamp = str((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 output_filename = os.path.join(camera_profile['storage'],
                                                'fetch_' + unix_timestamp + '.' + self.default_image_format)
-                self.uploader.send_pyobj({
-                    'active_devices': [
-                        {
-                            'device_key': device_key,
-                            'device_label': device_label,
-                            'type': 'camera',
-                            'image': image_data,
-                        }
-                    ]
-                })
+                self.uploader.send_pyobj((
+                    timestamp,
+                    {
+                        'active_devices': [
+                            {
+                                'device_key': device_key,
+                                'device_label': device_label,
+                                'type': 'camera',
+                                'image': image_data,
+                            }
+                        ]
+                    }
+                ))
                 log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
                 # persist for Cloud
                 im.save(output_filename)
@@ -616,6 +612,10 @@ class GoogleDriveManager(Thread, CloudStorage):
         self._gdrive_folder_url = None
 
     @property
+    def cloud_storage_folder_id(self):
+        return self._gdrive_folder_id
+
+    @property
     def cloud_storage_url(self):
         return self._gdrive_folder_url
 
@@ -676,7 +676,7 @@ class GoogleDriveManager(Thread, CloudStorage):
 
 class GoogleDriveArchiver(GoogleDriveManager):
 
-    def __init__(self, gauth_creds_file, gdrive_folder):
+    def __init__(self, gauth_creds_file, gdrive_folder, gdrive_folder_id, gdrive_folder_url):
         super(GoogleDriveArchiver, self).__init__(
             gauth_creds_file=gauth_creds_file,
             gdrive_folder=gdrive_folder)
@@ -687,9 +687,10 @@ class GoogleDriveArchiver(GoogleDriveManager):
         self._archive_drive = GoogleDrive(self.gauth)
         self._folder_id_cache = dict()
 
+        self._gdrive_folder_id = gdrive_folder_id
+        self._gdrive_folder_url = gdrive_folder_url
+
     def run(self):
-        # determine the Drive folder ID
-        self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
         while True:
             log.debug('Finding files in {} ({}) to archive.'.format(self._gdrive_folder, self._gdrive_folder_id))
             try:
@@ -779,13 +780,16 @@ class GoogleDriveUploader(GoogleDriveManager):
         self.socket = zmq_context.socket(zmq.PULL)
         self.socket.bind(URL_WORKER_CLOUD_STORAGE)
 
-    def run(self):
-        # determine the Drive folder ID
+        # determine the Drive folder details synchronously
         self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
+        log.info("Google Drive folder '{}' is at {}".format(self._gdrive_folder_id, self._gdrive_folder_url))
+
+    def run(self):
         while True:
             try:
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
-                self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
+                if os.path.exists(snapshot_path):
+                    self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
             except ContextTerminated:
                 self.socket.close()
                 break
@@ -859,6 +863,16 @@ class UploadEventHandler(FileSystemEventHandler):
         self.uploader = zmq_context.socket(zmq.PUSH)
         self.uploader.connect(URL_WORKER_UPLOADER)
 
+        self._cloud_storage_url = None
+
+    @property
+    def cloud_storage_url(self):
+        return self._cloud_storage_url
+
+    @cloud_storage_url.setter
+    def cloud_storage_url(self, cloud_storage_url):
+        self._cloud_storage_url = cloud_storage_url
+
     def close(self):
         self.cloud_storage_socket.close()
         self.uploader.close()
@@ -920,7 +934,13 @@ class UploadEventHandler(FileSystemEventHandler):
                         try:
                             # do not notify for fetched image data
                             if 'fetch' not in snapshot_path:
-                                self.uploader.send_pyobj(device_event)
+                                self.uploader.send_pyobj((
+                                    event.timestamp_string,
+                                    {
+                                        'active_devices': [event.dict],
+                                        'storage_url': self._cloud_storage_url
+                                    }
+                                ))
                             # upload the image snapshot to Cloud
                             self.cloud_storage_socket.send_pyobj((
                                 snapshot_path,
@@ -1050,12 +1070,16 @@ if __name__ == "__main__":
     notifier = Notifier()
     snapshotter = Snapshot(camera_profiles=camera_profiles)
     # ensure that auth is properly set up first
-    google_drive_archiver = GoogleDriveArchiver(
-        gauth_creds_file=config.get('gdrive', 'creds_file'),
-        gdrive_folder=config.get('gdrive', 'folder'))
     google_drive_uploader = GoogleDriveUploader(
         gauth_creds_file=config.get('gdrive', 'creds_file'),
         gdrive_folder=config.get('gdrive', 'folder'))
+    google_drive_archiver = GoogleDriveArchiver(
+        gauth_creds_file=config.get('gdrive', 'creds_file'),
+        gdrive_folder=config.get('gdrive', 'folder'),
+        gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
+        gdrive_folder_url=google_drive_uploader.cloud_storage_url)
+    # tell the uploader about the Cloud storage URL
+    upload_event_handler.cloud_storage_url = google_drive_uploader.cloud_storage_url
     # start threads
     notifier.start()
     threads_tracked.add(notifier.getName())
@@ -1086,10 +1110,13 @@ if __name__ == "__main__":
         google_drive_archiver.start()
         threads_tracked.add(google_drive_archiver.getName())
         while True:
-            uploader_socket.send_pyobj({
-                        #TODO statistics
-                        'device_info': device_info
-                    })
+            uploader_socket.send_pyobj((
+                None,  # timestamp
+                {
+                    #TODO statistics
+                    'device_info': device_info
+                }
+            ))
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated):
         notifier.stop()
