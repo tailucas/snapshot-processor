@@ -934,7 +934,7 @@ class UploadEventHandler(FileSystemEventHandler):
                             # do not notify for fetched image data
                             if 'fetch' not in snapshot_path:
                                 self.uploader.send_pyobj((
-                                    event.timestamp_string,
+                                    device_event.timestamp,
                                     {
                                         'active_devices': [event.dict],
                                         'storage_url': self._cloud_storage_url
