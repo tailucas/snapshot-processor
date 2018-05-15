@@ -171,6 +171,7 @@ class Uploader(Thread):
     @staticmethod
     def make_payload(timestamp=None, data=None):
         send_timestamp = make_timestamp(timestamp=timestamp, make_string=True)
+        # TODO: fixme
         log.info('DEBUG: sending timestamp {}'.format(send_timestamp))
         payload = {'timestamp': send_timestamp}
         if data is not None and len(data) > 0:
@@ -204,8 +205,10 @@ class DeviceActivator(Thread):
             try:
                 event = umsgpack.unpackb(self.listener.recv())
                 if 'timestamp' in event:
+                    #TODO: fixme
                     log.info('DEBUG: received timestamp {}'.format(event['timestamp']))
-                    timestamp = make_timestamp(value=event['timestamp'], as_tz=tz.tzlocal())
+                    timestamp = make_timestamp(timestamp=event['timestamp'], as_tz=tz.tzlocal())
+                    # TODO: fixme
                     log.info('DEBUG: transmuted timestamp to {}'.format(timestamp))
                 else:
                     timestamp = make_timestamp(as_tz=tz.tzlocal())
@@ -914,7 +917,7 @@ class UploadEventHandler(FileSystemEventHandler):
                                 self.uploader.send_pyobj((
                                     device_event.timestamp,
                                     {
-                                        'active_devices': [event.dict],
+                                        'active_devices': [device_event.dict],
                                         'storage_url': self._cloud_storage_url
                                     }
                                 ))
