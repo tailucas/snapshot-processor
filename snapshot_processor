@@ -129,8 +129,8 @@ def make_timestamp(timestamp=None, as_tz=pytz.utc, make_string=False):
         timestamp = timestamp.replace(tzinfo=local_tz)
     if timestamp.tzinfo != as_tz:
         # now adjust to requested TZ
-        #TODO: fixme
         new_timestamp = timestamp.astimezone(tz=as_tz)
+        #TODO: fixme
         log.info('{} adjusted to {} ({} to {})'.format(timestamp, new_timestamp, timestamp.tzinfo, as_tz))
         timestamp = new_timestamp
     if make_string:
@@ -533,7 +533,7 @@ class DeviceEvent(object):
 
     @timestamp.setter
     def timestamp(self, value):
-        self._timestamp = make_timestamp(timestamp=value)
+        self._timestamp = make_timestamp(timestamp=value, as_tz=tz.tzlocal())
 
     @property
     def timestamp_string(self):
