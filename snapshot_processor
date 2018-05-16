@@ -170,8 +170,7 @@ class Uploader(Thread):
     @staticmethod
     def make_payload(timestamp=None, data=None):
         send_timestamp = make_timestamp(timestamp=timestamp, make_string=True)
-        # TODO: fixme
-        log.info('DEBUG: sending timestamp {}'.format(send_timestamp))
+        log.debug('Payload timestamp {}'.format(send_timestamp))
         payload = {'timestamp': send_timestamp}
         if data is not None and len(data) > 0:
             payload['data'] = data
