@@ -113,12 +113,12 @@ def make_timestamp(timestamp=None, as_tz=pytz.utc, make_string=False):
         timestamp = datetime.utcfromtimestamp(timestamp).replace(tzinfo=pytz.utc)
     elif isinstance(timestamp, str):
         try:
-            timestamp = dateutil.parser.parse(timestamp).replace(tzinfo=pytz.utc)
+            timestamp = dateutil.parser.parse(timestamp)
             log.debug('Parsed timestamp is {}'.format(timestamp))
         except ValueError:
             try:
                 timestamp = datetime.utcfromtimestamp(int(timestamp)).replace(tzinfo=pytz.utc)
-                log.debug('Parsed timestamp is {}'.format(timestamp))
+                log.debug('Parsed integer timestamp is {}'.format(timestamp))
             except ValueError:
                 raise RuntimeError("Unknown date/time type: '{}'".format(timestamp))
     if timestamp.tzinfo is None:
@@ -473,6 +473,8 @@ class Snapshot(Thread):
                 image_data = r.content
                 im = Image.open(BytesIO(image_data))
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
+                #TODO: fixme
+                log.info('DEBUG: basing {} off of {}'.format(unix_timestamp, timestamp))
                 output_filename = os.path.join(camera_profile['storage'],
                                                'fetch_' + str(unix_timestamp) + '.' + self.default_image_format)
                 self.uploader.send_pyobj((
@@ -908,7 +910,11 @@ class UploadEventHandler(FileSystemEventHandler):
                             date_string = file_base_name.split('_')[1]
                         else:
                             date_string = file_base_name
+                        #TODO: fixme
+                        log.info('DEBUG: setting device event timestamp to {}'.format(date_string))
                         device_event.timestamp = date_string
+                        # TODO: fixme
+                        log.info('DEBUG: device event timestamp is now {}'.format(device_event.timestamp))
                         try:
                             # do not notify for fetched image data
                             if 'fetch' not in snapshot_path:
