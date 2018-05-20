@@ -806,7 +806,7 @@ class GoogleDriveUploader(GoogleDriveManager):
                 while True:
                     try:
                         f.Upload()
-                    except (ApiRequestError, BadStatusLine, SSLEOFError):
+                    except (ApiRequestError, BadStatusLine, SSLEOFError, BrokenPipeError):
                         if i >= 3:
                             raise
                         else:
