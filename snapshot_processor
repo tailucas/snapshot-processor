@@ -310,12 +310,23 @@ class Notifier(Thread):
         self.tts_auth = (tts_api_cfg['credentials']['username'],
                          tts_api_cfg['credentials']['password'])
 
+    def spawn_player(self):
+        if self.player:
+            try:
+                # be kind
+                self.player.stdin.write('quit' + os.linesep)
+                # be not so kind
+                self.player.kill()
+            except Exception:
+                log.debug('Ignoring failed attempt to kill player.', exc_info=1)
+        self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, universal_newlines=True, bufsize=1)
+        # set the O_NONBLOCK flag of stdout file descriptor:
+        flags = fcntl(self.player.stdout, F_GETFL)  # get current stdout flags
+        fcntl(self.player.stdout, F_SETFL, flags | O_NONBLOCK)
+
     def run(self):
         try:
-            self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, universal_newlines=True, bufsize=1)
-            # set the O_NONBLOCK flag of stdout file descriptor:
-            flags = fcntl(self.player.stdout, F_GETFL)  # get current stdout flags
-            fcntl(self.player.stdout, F_SETFL, flags | O_NONBLOCK)
+            self.spawn_player()
             # get current stdout flags
             mplayer_init_file = 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
             self.player.stdin.write(mplayer_init_file + os.linesep)
@@ -332,10 +343,16 @@ class Notifier(Thread):
                 if isinstance(notification, TTSNotification):
                     try:
                         self.say(str(notification))
-                    except Exception:
-                        log.exception("Unable to say message: '{}'".format(notification))
-                        sentry.captureException()
-                        self.play_file(os.path.join(TTS_DIR, self.tts_default_sound_file))
+                    except BrokenPipeError:
+                        # attempt to respawn the player
+                        self.spawn_player()
+                        try:
+                            # retry the message
+                            self.say(str(notification))
+                        except Exception:
+                            self.play_file(os.path.join(TTS_DIR, self.tts_default_sound_file))
+                            # whether we are able to play the default sound successfully or not, raise as unhandled
+                            raise
                 elif isinstance(notification, AudioNotification):
                     self.play_file(notification.message)
                 else:
