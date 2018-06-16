@@ -452,13 +452,15 @@ class Notifier(Thread):
 
 class Snapshot(Thread):
 
-    def __init__(self, camera_profiles):
+    def __init__(self, camera_profiles, cloud_storage_url):
         super(Snapshot, self).__init__(name=self.__class__.__name__)
         self.daemon = True
 
         self.cameras = camera_profiles
         self.default_command = config.get('camera', 'default_command')
         self.default_image_format = config.get('camera', 'default_image_format')
+
+        self.cloud_storage_url = cloud_storage_url
 
         self.socket = zmq_context.socket(zmq.PULL)
         self.socket.bind(URL_WORKER_SNAPSHOT)
@@ -504,7 +506,8 @@ class Snapshot(Thread):
                                 'type': 'camera',
                                 'image': image_data,
                             }
-                        ]
+                        ],
+                        'storage_url': self._cloud_storage_url
                     }
                 ))
                 log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
@@ -1069,7 +1072,7 @@ if __name__ == "__main__":
     filetype = FileType()
     # application threads
     notifier = Notifier()
-    snapshotter = Snapshot(camera_profiles=camera_profiles)
+
     # ensure that auth is properly set up first
     google_drive_uploader = GoogleDriveUploader(
         gauth_creds_file=config.get('gdrive', 'creds_file'),
@@ -1081,6 +1084,7 @@ if __name__ == "__main__":
         gdrive_folder_url=google_drive_uploader.cloud_storage_url)
     # tell the uploader about the Cloud storage URL
     upload_event_handler.cloud_storage_url = google_drive_uploader.cloud_storage_url
+    snapshotter = Snapshot(camera_profiles=camera_profiles, cloud_storage_url=google_drive_uploader.cloud_storage_url)
     # start threads
     notifier.start()
     threads_tracked.add(notifier.getName())
