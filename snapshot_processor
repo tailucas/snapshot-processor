@@ -507,7 +507,7 @@ class Snapshot(Thread):
                                 'image': image_data,
                             }
                         ],
-                        'storage_url': self._cloud_storage_url
+                        'storage_url': self.cloud_storage_url
                     }
                 ))
                 log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
