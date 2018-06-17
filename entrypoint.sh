@@ -134,17 +134,9 @@ for iface in eth0 wlan0; do
     break
   fi
 done
-SUB_CACHE=/data/sub_src
-if [ -e "$SUB_CACHE" ]; then
-  export SUB_SRC="$(cat "$SUB_CACHE")"
-fi
-# get the latest sources and bail unless cached
-export SUB_SRC="$(/app/resin --get-devices | grep -v "$ETH0_IP" | paste -d, -s)" || [ -n "${SUB_SRC:-}" ]
-echo "$SUB_SRC" > "$SUB_CACHE"
 # application configuration (no tee for secrets)
 cat /app/config/app.conf | /app/config_interpol > "/app/${APP_NAME}.conf"
 unset ETH0_IP
-unset SUB_SRC
 
 cat /app/config/cleanup_snapshots | sed "s~__STORAGE__~${STORAGE_UPLOADS}/~g" > /etc/cron.d/cleanup_snapshots
 
