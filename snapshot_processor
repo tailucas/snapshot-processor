@@ -823,16 +823,17 @@ class GoogleDriveUploader(GoogleDriveManager):
             })
             f.SetContentFile(file_path)
             for i in range(0, 3):
-                try:
-                    f.Upload()
-                except (ApiRequestError, BadStatusLine, SSLEOFError, BrokenPipeError):
-                    if i >= 3:
-                        raise
-                    else:
-                        log.warning("Problem uploading '{}' to Google Drive. Retrying...".format(file_path), exc_info=True)
-                        sleep(1)
-                        continue
-                break
+                while True:
+                    try:
+                        f.Upload()
+                    except (ApiRequestError, BadStatusLine, SSLEOFError, BrokenPipeError):
+                        if i >= 3:
+                            raise
+                        else:
+                            log.warning("Problem uploading '{}' to Google Drive. Retrying...".format(file_path), exc_info=True)
+                            sleep(1)
+                            continue
+                    break
             link_msg = ""
             if 'thumbnailLink'in f:
                 link = f['thumbnailLink']
