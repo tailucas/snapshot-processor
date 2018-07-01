@@ -7,7 +7,6 @@ pytz
 pyzmq
 raven
 requests
-retrying
 resin-sdk
 tzupdate
 u-msgpack-python
