@@ -484,13 +484,22 @@ class Snapshot(Thread):
                     camera_command = output_trigger['device_params']
                 # unclear whether cam supports requests auth header
                 camera_auth_user, camera_auth_password = camera_profile['auth'].split(':')
-                r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_profile['url']), params={
-                    'cmd': camera_command,
-                    'usr': camera_auth_user,
-                    'pwd': camera_auth_password,
-                })
-                image_data = r.content
-                im = Image.open(BytesIO(image_data))
+                for tries in range(1, 4):
+                    try:
+                        r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_profile['url']), params={
+                            'cmd': camera_command,
+                            'usr': camera_auth_user,
+                            'pwd': camera_auth_password,
+                        })
+                        image_data = r.content
+                        im = Image.open(BytesIO(image_data))
+                        break
+                    except OSError:
+                        log.warning("Problem getting image from {}. Retrying...".format(camera_profile['url']),
+                                    exc_info=True)
+                        sleep(0.1)
+                        if tries >= 3:
+                            raise
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 #TODO: fixme
                 log.info('DEBUG: basing {} off of {}'.format(unix_timestamp, timestamp))
