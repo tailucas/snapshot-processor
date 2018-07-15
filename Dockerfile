@@ -1,4 +1,4 @@
-FROM resin/raspberry-pi2-debian:jessie
+FROM resin/raspberry-pi2-debian:stretch
 ENV INITSYSTEM on
 
 MAINTAINER db2inst1 <db2inst1@webafrica.org.za>
