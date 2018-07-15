@@ -41,6 +41,7 @@ from urllib.request import pathname2url
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated
+from zmq.error import ZMQError
 
 from PIL import Image
 
@@ -151,8 +152,14 @@ class Uploader(Thread):
     def run(self):
         # Socket to talk to the outside world
         publisher = zmq_context.socket(zmq.PUB)
-        publisher.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
-                                                  port=config.get('zmq', 'pubsub_port')))
+        try:
+            publisher.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
+                                                      port=config.get('zmq', 'pubsub_port')))
+        except ZMQError:
+            log.exception(self.__class__.__name__)
+            sentry.captureException()
+            raise
+
         while True:
             try:
                 (timestamp, event_data) = self.inproc_pull.recv_pyobj()
@@ -197,8 +204,14 @@ class DeviceActivator(Thread):
         self.snapshot.connect(URL_WORKER_SNAPSHOT)
 
         # Socket to talk to the outside world
-        self.listener.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
-                                                      port=config.get('zmq', 'pushpull_port')))
+        try:
+            self.listener.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
+                                                          port=config.get('zmq', 'pushpull_port')))
+        except ZMQError:
+            log.exception(self.__class__.__name__)
+            sentry.captureException()
+            raise
+
         while True:
             try:
                 event = umsgpack.unpackb(self.listener.recv())
