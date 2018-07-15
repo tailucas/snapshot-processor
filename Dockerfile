@@ -5,8 +5,7 @@ MAINTAINER db2inst1 <db2inst1@webafrica.org.za>
 LABEL Description="snapshot_processor" Vendor="db2inst1" Version="1.0"
 
 # http://unix.stackexchange.com/questions/339132/reinstall-man-pages-fix-man
-RUN rm -f /etc/dpkg/dpkg.cfg.d/01_nodoc
-RUN rm -f /etc/dpkg/dpkg.cfg.d/docker
+RUN rm -f /etc/dpkg/dpkg.cfg.d/01_nodoc /etc/dpkg/dpkg.cfg.d/docker
 RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils \
     ca-certificates \
