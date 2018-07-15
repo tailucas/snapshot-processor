@@ -102,6 +102,7 @@ mplayer = ['mplayer',
            '-slave',
            '-idle',
            '-really-quiet',
+           '-nolirc',
            '-msglevel', 'global=4',
            '-input', 'nodefault-bindings',
            '-noconfig', 'all']
