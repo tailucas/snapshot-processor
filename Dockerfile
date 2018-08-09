@@ -48,11 +48,13 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     wavemon \
     wget
 
-RUN pip3 install wheel
-COPY ./config/requirements.txt /tmp/
-RUN pip3 install -r /tmp/requirements.txt
+# python3 default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 
-COPY . /app
+COPY . /opt/app
+
+# setup
+RUN /opt/app/app_setup.sh
 
 # disable for boot for now
 RUN systemctl disable vsftpd
@@ -62,4 +64,4 @@ COPY ./config/systemd.launch.service /etc/systemd/system/launch.service.d/app_ov
 
 # ftp, ssh, zmq
 EXPOSE 21 22 5556 5558
-CMD ["/app/entrypoint.sh"]
+CMD ["/opt/app/entrypoint.sh"]
