@@ -7,6 +7,5 @@ pytz
 pyzmq
 raven
 requests
-tzupdate
 u-msgpack-python
 watchdog
