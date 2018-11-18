@@ -320,9 +320,9 @@ class Notifier(Thread):
         self.tts_file_format = 'flac'
         self.tts_file_encoding = 'audio/{}'.format(self.tts_file_format)
         self.tts_voice = config.get('ibm', 'tts_voice')
-        self.tts_url = '/'.join([tts_api_cfg['credentials']['url'], 'v1/synthesize'])
-        self.tts_auth = (tts_api_cfg['credentials']['username'],
-                         tts_api_cfg['credentials']['password'])
+        self.tts_url = '/'.join([tts_api_cfg['url'], 'v1/synthesize'])
+        self.tts_auth = ('apikey:{}'.format(tts_api_cfg['apikey']),
+                         None)
 
     def spawn_player(self):
         if self.player:
