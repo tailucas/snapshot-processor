@@ -40,6 +40,10 @@ from time import sleep
 from urllib.request import pathname2url
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
+
+from watson_developer_cloud import TextToSpeechV1
+from watson_developer_cloud import WatsonApiException
+
 from zmq import ContextTerminated
 from zmq.error import ZMQError
 
@@ -320,9 +324,10 @@ class Notifier(Thread):
         self.tts_file_format = 'flac'
         self.tts_file_encoding = 'audio/{}'.format(self.tts_file_format)
         self.tts_voice = config.get('ibm', 'tts_voice')
-        self.tts_url = '/'.join([tts_api_cfg['url'], 'v1/synthesize'])
-        self.tts_auth = ('apikey:{}'.format(tts_api_cfg['apikey']),
-                         None)
+        self.tts = text_to_speech = TextToSpeechV1(
+            iam_apikey=tts_api_cfg['apikey'],
+            url=tts_api_cfg['url']
+        )
 
     def spawn_player(self):
         if self.player:
@@ -429,27 +434,15 @@ class Notifier(Thread):
         log.debug('{} exists? {}'.format(tts_path, os.path.isfile(tts_path)))
         if not os.path.isfile(tts_path):
             log.debug("Generating '{}' using {}".format(message, self.tts_url))
-            r = requests.get(
-                url=self.tts_url,
-                auth=self.tts_auth,
-                params={'text': message,
-                        'voice': self.tts_voice},
-                headers={'accept': self.tts_file_encoding},
-                allow_redirects=False)
-            log.debug('HTTP {} from {}'.format(r.status_code, r.url))
-            r.raise_for_status()
-            log.debug('HTTP response: {}'.format(r.headers))
-            # HTTP30x
-            if r.status_code >= 300 and r.status_code < 400:
-                # try to give some helpful information
-                if 'location' in r.headers:
-                    log.warning('You must visit {} to create {}'.format(r.headers['location'], tts_path))
-            if r.status_code == requests.codes.ok:
-                # only write a file upon success
-                with open(tts_path, 'wb') as fd:
-                    for chunk in r.iter_content(1024*64):
-                        fd.write(chunk)
-                log.debug('Written {} bytes to {}'.format(os.path.getsize(tts_path), tts_path))
+            r = self.tts.synthesize(
+                text=message,
+                accept=self.tts_file_encoding,
+                voice=self.tts_voice)
+            # only write a file upon success
+            with open(tts_path, 'wb') as fd:
+                for chunk in r.response.iter_content(1024*64):
+                    fd.write(chunk)
+            log.debug('Written {} bytes to {}'.format(os.path.getsize(tts_path), tts_path))
         if os.path.isfile(tts_path):
             # now play
             log.debug("Saying '{}'...".format(message))
