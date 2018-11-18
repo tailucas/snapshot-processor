@@ -440,7 +440,7 @@ class Notifier(Thread):
                 voice=self.tts_voice)
             # only write a file upon success
             with open(tts_path, 'wb') as fd:
-                for chunk in r.response.iter_content(1024*64):
+                for chunk in r.result.iter_content(1024*64):
                     fd.write(chunk)
             log.debug('Written {} bytes to {}'.format(os.path.getsize(tts_path), tts_path))
         if os.path.isfile(tts_path):
