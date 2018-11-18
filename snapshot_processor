@@ -433,7 +433,7 @@ class Notifier(Thread):
             os.remove(tts_path)
         log.debug('{} exists? {}'.format(tts_path, os.path.isfile(tts_path)))
         if not os.path.isfile(tts_path):
-            log.debug("Generating '{}' using {}".format(message, self.tts_url))
+            log.debug("Generating '{}' using voice {} in format {}".format(message, self.tts_voice, self.tts_file_encoding))
             r = self.tts.synthesize(
                 text=message,
                 accept=self.tts_file_encoding,
