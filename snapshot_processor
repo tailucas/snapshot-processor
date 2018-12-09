@@ -50,8 +50,8 @@ from zmq.error import ZMQError
 from PIL import Image
 
 APP = os.path.basename(__file__)
-if os.system('systemctl status app') == 0:
-    print('{} is already running.'.format(APP))
+if sys.stdout.isatty() and os.system('systemctl status app') == 0:
+    print("{} is already running. Use 'systemctl stop app' to stop first.".format(APP))
     sys.exit(1)
 
 TTS_DIR = '/data/tts_samples'
