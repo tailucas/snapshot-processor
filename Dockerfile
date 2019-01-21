@@ -58,9 +58,6 @@ COPY . /opt/app
 # setup
 RUN /opt/app/app_setup.sh
 
-# disable for boot for now
-RUN /bin/systemctl disable vsftpd
-
 # Resin systemd
 COPY ./config/systemd.launch.service /etc/systemd/system/launch.service.d/app_override.conf
 
