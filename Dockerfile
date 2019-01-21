@@ -42,6 +42,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     rsyslog \
     ssl-cert \
     strace \
+    systemd \
     tree \
     vim \
     vsftpd \
@@ -57,6 +58,9 @@ COPY . /opt/app
 
 # setup
 RUN /opt/app/app_setup.sh
+
+# disable for boot for now
+RUN systemctl disable vsftpd
 
 # Resin systemd
 COPY ./config/systemd.launch.service /etc/systemd/system/launch.service.d/app_override.conf

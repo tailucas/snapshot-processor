@@ -172,14 +172,14 @@ for systemdsvc in app; do
   if [ ! -e "/etc/systemd/system/${systemdsvc}.service" ]; then
     cat "/opt/app/config/systemd.${systemdsvc}.service" | /opt/app/config_interpol | tee "/etc/systemd/system/${systemdsvc}.service"
     chmod 664 "/etc/systemd/system/${systemdsvc}.service"
-    /bin/systemctl daemon-reload
-    /bin/systemctl enable "${systemdsvc}"
+    systemctl daemon-reload
+    systemctl enable "${systemdsvc}"
   fi
 done
 # vsftpd can be enabled now
 for systemdsvc in vsftpd; do
-  /bin/systemctl enable "${systemdsvc}"
+  systemctl enable "${systemdsvc}"
 done
 for systemdsvc in cron vsftpd app; do
-  /bin/systemctl start "${systemdsvc}"&
+  systemctl start "${systemdsvc}"&
 done
