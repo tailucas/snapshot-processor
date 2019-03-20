@@ -144,7 +144,6 @@ class Uploader(Thread):
                                                       port=config.get('zmq', 'pubsub_port')))
         except ZMQError:
             log.exception(self.__class__.__name__)
-            sentry.captureException()
             raise
 
         while True:
@@ -196,7 +195,6 @@ class DeviceActivator(Thread):
                                                           port=config.get('zmq', 'pushpull_port')))
         except ZMQError:
             log.exception(self.__class__.__name__)
-            sentry.captureException()
             raise
 
         while True:
