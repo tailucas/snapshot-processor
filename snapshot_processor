@@ -483,7 +483,7 @@ class Snapshot(Thread):
                         break
                     except OSError:
                         log.warning("Problem getting image from {}. Retrying...".format(camera_profile['url']),
-                                    exc_info=True)
+                                    exc_info=1)
                         sleep(0.1)
                         if tries >= 3:
                             raise
@@ -825,7 +825,7 @@ class GoogleDriveUploader(GoogleDriveManager):
                     if i >= 3:
                         raise
                     else:
-                        log.warning("Problem uploading '{}' to Google Drive. Retrying...".format(file_path), exc_info=True)
+                        log.warning("Problem uploading '{}' to Google Drive. Retrying...".format(file_path), exc_info=1)
                         sleep(1)
                         continue
                 break
@@ -989,7 +989,7 @@ def thread_nanny(threads_tracked, signal_handler):
                 threads_alive.add(thread_info.getName())
         if len(threads_tracked - threads_alive) > 0:
             message = 'A thread has died. Expected threads are [{}], missing is [{}].'.format(threads_tracked, threads_tracked - threads_alive)
-            log.error(message)
+            log.fatal(message)
             os._exit(1)
         time.sleep(10)
 
@@ -1068,16 +1068,19 @@ if __name__ == "__main__":
     filetype = FileType()
     # application threads
     notifier = Notifier()
-
     # ensure that auth is properly set up first
-    google_drive_uploader = GoogleDriveUploader(
-        gauth_creds_file=config.get('gdrive', 'creds_file'),
-        gdrive_folder=config.get('gdrive', 'folder'))
-    google_drive_archiver = GoogleDriveArchiver(
-        gauth_creds_file=config.get('gdrive', 'creds_file'),
-        gdrive_folder=config.get('gdrive', 'folder'),
-        gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
-        gdrive_folder_url=google_drive_uploader.cloud_storage_url)
+    try:
+        google_drive_uploader = GoogleDriveUploader(
+            gauth_creds_file=config.get('gdrive', 'creds_file'),
+            gdrive_folder=config.get('gdrive', 'folder'))
+        google_drive_archiver = GoogleDriveArchiver(
+            gauth_creds_file=config.get('gdrive', 'creds_file'),
+            gdrive_folder=config.get('gdrive', 'folder'),
+            gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
+            gdrive_folder_url=google_drive_uploader.cloud_storage_url)
+    except Exception:
+        log.fatal('Google Drive setup failure.', exc_info=1)
+        exit(1)
     # tell the uploader about the Cloud storage URL
     upload_event_handler.cloud_storage_url = google_drive_uploader.cloud_storage_url
     snapshotter = Snapshot(camera_profiles=camera_profiles, cloud_storage_url=google_drive_uploader.cloud_storage_url)
