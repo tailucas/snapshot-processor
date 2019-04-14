@@ -102,9 +102,6 @@ if [ -d /var/awslogs/etc/ ]; then
   mv /var/awslogs/etc/aws.conf.new /var/awslogs/etc/aws.conf
 fi
 
-# remove unnecessary kernel drivers
-rmmod w1_gpio||true
-
 # FTP server setup
 id -u "${FTP_USER}" || useradd -r -g "${APP_GROUP}" "${FTP_USER}"
 FTP_HOME="/home/${FTP_USER}"
@@ -166,6 +163,10 @@ echo "export HISTFILE=/data/.bash_history" >> /etc/bash.bashrc
 
 # link in libbcm_host.so required by mplayer
 sudo ln -fs /opt/vc/lib/libbcm_host.so /usr/lib/libbcm_host.so
+
+# https://github.com/balena-io-projects/balena-rpi-python-picamera
+# https://www.balena.io/docs/learn/develop/hardware/i2c-and-spi/#raspberry-pi-camera-module
+modprobe v4l2_common
 
 # systemd configuration
 for systemdsvc in app; do

@@ -1,6 +1,7 @@
 PyDrive
 argparse
 pathtools
+picamera
 python-dateutil
 python-magic
 pytz
