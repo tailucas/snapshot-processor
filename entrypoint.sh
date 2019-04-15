@@ -166,7 +166,7 @@ sudo ln -fs /opt/vc/lib/libbcm_host.so /usr/lib/libbcm_host.so
 
 # https://github.com/balena-io-projects/balena-rpi-python-picamera
 # https://www.balena.io/docs/learn/develop/hardware/i2c-and-spi/#raspberry-pi-camera-module
-modprobe v4l2_common
+# modprobe v4l2_common
 
 # systemd configuration
 for systemdsvc in app; do
