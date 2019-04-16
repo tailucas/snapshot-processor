@@ -60,6 +60,8 @@ fi
 
 set -x
 
+# tts samples
+cp -rv /opt/app/tts_samples/ /data/
 
 # Run user
 export APP_USER="${APP_USER:-app}"
@@ -153,9 +155,6 @@ unset ETH0_IP
 
 cat /opt/app/config/cleanup_snapshots | sed "s~__STORAGE__~${STORAGE_UPLOADS}/~g" > /etc/cron.d/cleanup_snapshots
 cat /opt/app/config/backup_auth_token | sed "s~__APP_USER__~${APP_USER}~g" > /etc/cron.d/backup_auth_token
-
-# tts samples
-cp -rv /opt/app/tts_samples/ /data/
 
 # so app user can make the noise
 adduser "${APP_USER}" audio
