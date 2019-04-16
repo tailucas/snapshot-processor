@@ -26,14 +26,15 @@ echo "$GOOGLE_CLIENT_SECRETS" > /opt/app/client_secrets.json
 if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
   echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
 fi
-echo "$API_IBM_TTS" > /opt/app/ibm_tts_creds.json
-
 # Google Refresh Token restore
-. /opt/app/bin/activate
 if [ ! -f /data/snapshot_processor_creds ]; then
+  set +u # work around venv stupidity
+  . /opt/app/bin/activate
   aws s3 cp s3://tailucas/home-automation/snapshot_processor_creds /data/snapshot_processor_creds
+  deactivate
+  set -u
 fi
-deactivate
+echo "$API_IBM_TTS" > /opt/app/ibm_tts_creds.json
 
 # aws code commit
 if [ -n "${AWS_REPO_SSH_KEY_ID:-}" ]; then
