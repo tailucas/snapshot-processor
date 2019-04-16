@@ -28,6 +28,13 @@ if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
 fi
 echo "$API_IBM_TTS" > /opt/app/ibm_tts_creds.json
 
+# Google Refresh Token restore
+. /opt/app/bin/activate
+if [ ! -f /data/snapshot_processor_creds ]; then
+  aws s3 cp s3://tailucas/home-automation/snapshot_processor_creds /data/snapshot_processor_creds
+fi
+deactivate
+
 # aws code commit
 if [ -n "${AWS_REPO_SSH_KEY_ID:-}" ]; then
   # ssh
