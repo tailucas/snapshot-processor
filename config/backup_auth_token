@@ -1,0 +1,1 @@
+40,10 * * * * __APP_USER__ ls -l /data/snapshot_processor_creds

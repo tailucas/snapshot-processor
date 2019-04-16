@@ -1,5 +1,6 @@
 PyDrive
 argparse
+awscli
 pathtools
 picamera
 python-dateutil

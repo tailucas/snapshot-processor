@@ -144,6 +144,7 @@ cat /opt/app/config/app.conf | /opt/app/config_interpol > "/opt/app/${APP_NAME}.
 unset ETH0_IP
 
 cat /opt/app/config/cleanup_snapshots | sed "s~__STORAGE__~${STORAGE_UPLOADS}/~g" > /etc/cron.d/cleanup_snapshots
+cat /opt/app/config/backup_auth_token | sed "s~__APP_USER__~${APP_USER}/~g" > /etc/cron.d/backup_auth_token
 
 # tts samples
 cp -rv /opt/app/tts_samples/ /data/
