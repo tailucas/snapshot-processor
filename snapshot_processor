@@ -32,6 +32,8 @@ from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
 from raven import Client as Sentry
+from requests.adapters import ConnectionError
+from requests.exceptions import RequestException
 from socket import error as socket_error
 from ssl import SSLEOFError
 from subprocess import PIPE, Popen
@@ -481,12 +483,14 @@ class Snapshot(Thread):
                         image_data = r.content
                         im = Image.open(BytesIO(image_data))
                         break
-                    except OSError:
+                    except (OSError, ConnectionError, RequestException):
                         log.warning("Problem getting image from {}. Retrying...".format(camera_profile['url']),
                                     exc_info=1)
                         sleep(0.1)
                         if tries >= 3:
-                            raise
+                            log.exception("Giving up getting image from {} after {} tries.".format(camera_profile['url'],
+                                                                                                   tries))
+                            continue
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 #TODO: fixme
                 log.info('DEBUG: basing {} off of {}'.format(unix_timestamp, timestamp))
