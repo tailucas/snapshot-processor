@@ -1,11 +1,9 @@
 #!/usr/bin/env python
 import dateutil.parser
-import hashlib
 import logging
 import logging.handlers
 
 import copy
-import json
 import os
 import pytz
 import requests
@@ -15,9 +13,6 @@ import threading
 import time
 import umsgpack
 import zmq
-
-from fcntl import fcntl, F_GETFL, F_SETFL
-from os import O_NONBLOCK, read
 
 from configparser import ConfigParser
 
@@ -36,15 +31,11 @@ from requests.adapters import ConnectionError
 from requests.exceptions import RequestException
 from socket import error as socket_error
 from ssl import SSLEOFError
-from subprocess import PIPE, Popen
 from threading import Thread
 from time import sleep
 from urllib.request import pathname2url
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
-
-from watson_developer_cloud import TextToSpeechV1
-from watson_developer_cloud import WatsonApiException
 
 from zmq import ContextTerminated
 from zmq.error import ZMQError
@@ -56,7 +47,6 @@ if sys.stdout.isatty() and os.system('systemctl status app') == 0:
     print("{} is already running. Use 'systemctl stop app' to stop first.".format(APP))
     sys.exit(1)
 
-TTS_DIR = '/data/tts_samples'
 # set the working directory for libraries that assume this (such as PyDrive)
 DIR = os.path.abspath(os.path.dirname(__file__))
 os.chdir(DIR)
@@ -75,7 +65,6 @@ cloud_storage = None
 zmq_context = zmq.Context()
 zmq_context.setsockopt(zmq.LINGER, 0)
 
-URL_WORKER_NOTIFIER = 'inproc://notifier'
 URL_WORKER_SNAPSHOT = 'inproc://snapshot'
 URL_WORKER_UPLOADER = 'inproc://uploader'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
@@ -181,14 +170,11 @@ class DeviceActivator(Thread):
         self.daemon = True
 
         self.listener = zmq_context.socket(zmq.PULL)
-        # what to do with notifications
-        self.notifier = zmq_context.socket(zmq.PUSH)
         # to create snapshots
         self.snapshot = zmq_context.socket(zmq.PUSH)
 
     def run(self):
         # outputs
-        self.notifier.connect(URL_WORKER_NOTIFIER)
         self.snapshot.connect(URL_WORKER_SNAPSHOT)
 
         # Socket to talk to the outside world
@@ -217,18 +203,7 @@ class DeviceActivator(Thread):
                 if 'trigger_output' in event_data:
                     trigger_output = event_data['trigger_output']
                     output_type = trigger_output['type']
-                    if output_type.lower() == 'tts':
-                        if 'input_context' not in event_data:
-                            log.warning('{} requested without context, ignoring.'.format(output_type))
-                            continue
-                        input_device_label = event_data['input_context']['device_label']
-                        event_detail = ""
-                        if 'event_detail' in event_data['input_context']:
-                            event_detail = ' {}'.format(event_data['input_context']['event_detail'])
-                        notification_message = '{}{}'.format(input_device_label, event_detail)
-                        log.info("TTS '{}'".format(notification_message))
-                        self.notifier.send_pyobj(TTSNotification(message=notification_message))
-                    elif output_type.lower() == 'camera':
+                    if output_type.lower() == 'camera':
                         log.info("Camera snapshot '{}'".format(trigger_output['device_label']))
                         trigger_output.update({'timestamp': timestamp})
                         self.snapshot.send_pyobj(trigger_output)
@@ -237,7 +212,6 @@ class DeviceActivator(Thread):
                         continue
             except ContextTerminated:
                 self.listener.close()
-                self.notifier.close()
                 self.snapshot.close()
                 break
             except Exception:
@@ -267,176 +241,6 @@ class FileType(object):
 
 
 filetype = None
-
-
-class Notification(object, metaclass=ABCMeta):
-    def __init__(self, message):
-        self.message = message
-
-    def __str__(self):
-        return self.message
-
-
-class TTSNotification(Notification):
-
-    def __init__(self, message):
-        super(TTSNotification, self).__init__(message=message)
-
-
-class AudioNotification(Notification):
-
-    def __init__(self, message):
-        super(AudioNotification, self).__init__(message=message)
-
-
-class Notifier(Thread):
-
-    def __init__(self):
-        super(Notifier, self).__init__(name=self.__class__.__name__)
-        self.daemon = True
-        # audio player wrapper
-        self.player = None
-
-        self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.bind(URL_WORKER_NOTIFIER)
-
-        self.tts_default_sound_file = config.get('app', 'tts_default_sound')
-        with open(config.get('ibm', 'tts_creds')) as config_file:
-            tts_api_cfg = json.load(config_file)
-        self.tts_file_format = 'flac'
-        self.tts_file_encoding = 'audio/{}'.format(self.tts_file_format)
-        self.tts_voice = config.get('ibm', 'tts_voice')
-        self.tts = text_to_speech = TextToSpeechV1(
-            iam_apikey=tts_api_cfg['apikey'],
-            url=tts_api_cfg['url']
-        )
-
-    def spawn_player(self):
-        if self.player:
-            try:
-                # be kind
-                self.player.stdin.write('quit' + os.linesep)
-                # be not so kind
-                self.player.kill()
-            except Exception:
-                log.debug('Ignoring failed attempt to kill player.', exc_info=1)
-        self.player = Popen(mplayer, stdin=PIPE, stdout=PIPE, universal_newlines=True, bufsize=1)
-        # set the O_NONBLOCK flag of stdout file descriptor:
-        flags = fcntl(self.player.stdout, F_GETFL)  # get current stdout flags
-        fcntl(self.player.stdout, F_SETFL, flags | O_NONBLOCK)
-
-    def run(self):
-        try:
-            self.spawn_player()
-            # get current stdout flags
-            mplayer_init_file = 'loadfile {}'.format(os.path.join(TTS_DIR, config.get('app', 'tts_startup_sound')))
-            self.player.stdin.write(mplayer_init_file + os.linesep)
-        except Exception:
-            log.exception(self.__class__.__name__)
-            sentry.captureException()
-            # nothing can be done to fix this
-            raise
-
-        while True:
-            notification = None
-            try:
-                notification = self.socket.recv_pyobj()
-                if isinstance(notification, TTSNotification):
-                    try:
-                        self.say(str(notification))
-                    except BrokenPipeError:
-                        # attempt to respawn the player
-                        self.spawn_player()
-                        try:
-                            # retry the message
-                            self.say(str(notification))
-                        except Exception:
-                            self.play_file(os.path.join(TTS_DIR, self.tts_default_sound_file))
-                            # whether we are able to play the default sound successfully or not, raise as unhandled
-                            raise
-                elif isinstance(notification, AudioNotification):
-                    self.play_file(notification.message)
-                else:
-                    log.error('Unknown notification type {}'.format(notification.__class__))
-            except ContextTerminated:
-                self.socket.close()
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                sentry.captureException()
-                sleep(1)
-                continue
-
-    def stop(self):
-        if self.player:
-            try:
-                self.player.stdin.write('quit' + os.linesep)
-            except Exception:
-                self.player.kill()
-
-    def play_file(self, sound_file):
-        if self.player:
-            self.player.stdin.write('loadfile {}'.format(sound_file) + os.linesep)
-            # delay for at least 1 second for short tones
-            sleep(1)
-            while True:
-                self.player.stdin.write('get_file_name' + os.linesep)
-                sleep(1)
-                try:
-                    sound_file_playing = read(self.player.stdout.fileno(), 1024)
-                except OSError:
-                    break
-                # request the currently playing file
-                if not sound_file_playing or len(sound_file_playing.decode().rstrip()) == 0:
-                    break
-                ans_prefix = 'ANS_FILENAME='
-                sound_file_playing = sound_file_playing.decode()
-                if sound_file_playing.startswith(ans_prefix):
-                    sound_file_playing = sound_file_playing[len(ans_prefix):].rstrip().replace("'", '')
-                if sound_file_playing == os.path.basename(sound_file):
-                    log.debug('Playing {}.'.format(sound_file_playing))
-                else:
-                    log.debug('Expected to be playing {} but instead {}. Waiting...'.format(
-                        os.path.basename(sound_file),
-                        sound_file_playing))
-        else:
-            log.error("No player loaded to play '{}'".format(sound_file))
-
-    def say(self, message):
-        msg_checksum = Notifier.checksum(message)
-        log.debug("Checksum for '{}' is [{}]".format(message, msg_checksum))
-        tts_file = '{}.{}.{}'.format(msg_checksum, self.tts_voice, self.tts_file_format)
-        tts_path = os.path.join(TTS_DIR, tts_file)
-        if os.path.isfile(tts_path) and os.path.getsize(tts_path) == 0:
-            log.warning('Removing empty file {}'.format(tts_path))
-            os.remove(tts_path)
-        if filetype.test_type(tts_path, 'audio') is None:
-            log.warning('Removing audio file of unknown type {}'.format(tts_path))
-            os.remove(tts_path)
-        log.debug('{} exists? {}'.format(tts_path, os.path.isfile(tts_path)))
-        if not os.path.isfile(tts_path):
-            log.debug("Generating '{}' using voice {} in format {}".format(message, self.tts_voice, self.tts_file_encoding))
-            r = self.tts.synthesize(
-                text=message,
-                accept=self.tts_file_encoding,
-                voice=self.tts_voice)
-            # only write a file upon success
-            with open(tts_path, 'wb') as fd:
-                for chunk in r.result.iter_content(1024*64):
-                    fd.write(chunk)
-            log.debug('Written {} bytes to {}'.format(os.path.getsize(tts_path), tts_path))
-        if os.path.isfile(tts_path):
-            # now play
-            log.debug("Saying '{}'...".format(message))
-            self.play_file(tts_path)
-        else:
-            raise Exception('No file {} to play "{}"'.format(tts_path, message))
-
-    @staticmethod
-    def checksum(message):
-        m = hashlib.md5()
-        m.update(message.encode())
-        return m.hexdigest()
 
 
 class Snapshot(Thread):
@@ -1070,8 +874,6 @@ if __name__ == "__main__":
     threads_tracked.add(uploader.getName())
     # top-level types
     filetype = FileType()
-    # application threads
-    notifier = Notifier()
     # ensure that auth is properly set up first
     try:
         google_drive_uploader = GoogleDriveUploader(
@@ -1089,8 +891,6 @@ if __name__ == "__main__":
     upload_event_handler.cloud_storage_url = google_drive_uploader.cloud_storage_url
     snapshotter = Snapshot(camera_profiles=camera_profiles, cloud_storage_url=google_drive_uploader.cloud_storage_url)
     # start threads
-    notifier.start()
-    threads_tracked.add(notifier.getName())
     snapshotter.start()
     threads_tracked.add(snapshotter.getName())
     # start the collectors
@@ -1128,7 +928,6 @@ if __name__ == "__main__":
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
         log.info("Shutting down...")
-        notifier.stop()
         observer.stop()
         observer.join()
         upload_event_handler.close()

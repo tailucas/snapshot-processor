@@ -1,4 +1,4 @@
-FROM balenalib/raspberry-pi2-debian:stretch-run
+FROM balenalib/raspberrypi3-debian:stretch-run
 ENV INITSYSTEM on
 ENV container docker
 
@@ -8,7 +8,6 @@ LABEL Description="snapshot_processor" Vendor="db2inst1" Version="1.0"
 # http://unix.stackexchange.com/questions/339132/reinstall-man-pages-fix-man
 RUN rm -f /etc/dpkg/dpkg.cfg.d/01_nodoc /etc/dpkg/dpkg.cfg.d/docker
 RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommends \
-    alsa-utils \
     ca-certificates \
     cron \
     cpp \
@@ -28,7 +27,6 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     man-db \
     manpages \
     mediainfo \
-    mplayer \
     net-tools \
     openssh-server \
     openssl \
@@ -47,7 +45,6 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     tree \
     vim \
     vsftpd \
-    wavemon \
     wget \
     && pip3 install \
         tzupdate

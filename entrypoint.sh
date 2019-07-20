@@ -34,7 +34,6 @@ if [ ! -f /data/snapshot_processor_creds ]; then
   deactivate
   set -u
 fi
-echo "$API_IBM_TTS" > /opt/app/ibm_tts_creds.json
 
 # aws code commit
 if [ -n "${AWS_REPO_SSH_KEY_ID:-}" ]; then
@@ -59,9 +58,6 @@ if [ ! -e /etc/docker.env ]; then
 fi
 
 set -x
-
-# tts samples
-cp -rv /opt/app/tts_samples/ /data/
 
 # Run user
 export APP_USER="${APP_USER:-app}"
@@ -170,11 +166,6 @@ unset ETH0_IP
 cat /opt/app/config/cleanup_snapshots | sed "s~__STORAGE__~${STORAGE_UPLOADS}/~g" > /etc/cron.d/cleanup_snapshots
 cat /opt/app/config/backup_auth_token | sed "s~__APP_USER__~${APP_USER}~g" > /etc/cron.d/backup_auth_token
 
-# so app user can make the noise
-adduser "${APP_USER}" audio
-# set the volume
-amixer set PCM "${TTS_VOLUME_PERCENT:-100}%"
-
 # Load app environment, overriding HOME and USER
 # https://www.freedesktop.org/software/systemd/man/systemd.exec.html
 cat /etc/docker.env | egrep -v "^HOME|^USER" > /opt/app/environment.env
@@ -182,9 +173,6 @@ echo "HOME=/data/" >> /opt/app/environment.env
 echo "USER=${APP_USER}" >> /opt/app/environment.env
 
 echo "export HISTFILE=/data/.bash_history" >> /etc/bash.bashrc
-
-# link in libbcm_host.so required by mplayer
-sudo ln -fs /opt/vc/lib/libbcm_host.so /usr/lib/libbcm_host.so
 
 # https://github.com/balena-io-projects/balena-rpi-python-picamera
 # https://www.balena.io/docs/learn/develop/hardware/i2c-and-spi/#raspberry-pi-camera-module
