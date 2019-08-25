@@ -9,6 +9,7 @@ LABEL Description="snapshot_processor" Vendor="db2inst1" Version="1.0"
 RUN rm -f /etc/dpkg/dpkg.cfg.d/01_nodoc /etc/dpkg/dpkg.cfg.d/docker
 RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    cmake \
     cron \
     cpp \
     curl \
