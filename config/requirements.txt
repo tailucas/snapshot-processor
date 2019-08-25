@@ -1,6 +1,7 @@
 PyDrive
 argparse
 awscli
+dlib
 face_recognition
 pathtools
 picamera
