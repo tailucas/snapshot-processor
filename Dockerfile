@@ -25,6 +25,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     libssl-dev \
     libzmq3-dev \
     lsof \
+    make \
     man-db \
     manpages \
     mediainfo \
