@@ -1,6 +1,7 @@
 PyDrive
 argparse
 awscli
+face_recognition
 pathtools
 picamera
 python-dateutil
