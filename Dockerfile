@@ -22,6 +22,9 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     less \
     libffi-dev \
     libraspberrypi-bin \
+    libjpeg-dev \
+    liblapack-dev \
+    libopenblas-dev \
     libssl-dev \
     libzmq3-dev \
     lsof \
