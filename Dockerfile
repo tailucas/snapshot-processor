@@ -20,6 +20,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     htop \
     jq \
     less \
+    libatlas-base-dev \
     libffi-dev \
     libraspberrypi-bin \
     libjpeg-dev \
