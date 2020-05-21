@@ -28,6 +28,9 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     libopenblas-dev \
     libssl-dev \
     libzmq3-dev \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
     lsof \
     make \
     man-db \
@@ -53,7 +56,8 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     vsftpd \
     wget \
     && pip3 install \
-        tzupdate
+        tzupdate \
+    && rm -rf /var/lib/apt/lists/*
 
 # python3 default
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1

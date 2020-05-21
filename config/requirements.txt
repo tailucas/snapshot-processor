@@ -3,6 +3,7 @@ argparse
 awscli
 face_recognition
 numpy
+opencv-python
 pathtools
 picamera
 python-dateutil
