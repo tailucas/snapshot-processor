@@ -5,41 +5,29 @@ ENV container docker
 MAINTAINER db2inst1 <db2inst1@webafrica.org.za>
 LABEL Description="snapshot_processor" Vendor="db2inst1" Version="1.0"
 
-# http://unix.stackexchange.com/questions/339132/reinstall-man-pages-fix-man
-RUN rm -f /etc/dpkg/dpkg.cfg.d/01_nodoc /etc/dpkg/dpkg.cfg.d/docker
 RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     cmake \
     cron \
     cpp \
-    curl \
     dbus \
     g++ \
     gcc \
     git \
     htop \
-    jq \
-    less \
     libatlas-base-dev \
     libffi-dev \
     libraspberrypi-bin \
     libjpeg-dev \
     liblapack-dev \
     libopenblas-dev \
-    libssl-dev \
-    libzmq3-dev \
     libsm6 \
     libxext6 \
     libxrender-dev \
     lsof \
     make \
-    man-db \
-    manpages \
     mediainfo \
-    net-tools \
     openssh-server \
-    openssl \
-    psmisc \
     python3-certifi \
     python3-dbus \
     python3 \
@@ -49,7 +37,6 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     python3-setuptools \
     python3-venv \
     rsyslog \
-    ssl-cert \
     strace \
     systemd \
     tree \
