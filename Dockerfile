@@ -33,6 +33,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     python3-dbus \
     python3 \
     python3-dev \
+    python3-opencv \
     python3-pil \
     python3-pip \
     python3-setuptools \
