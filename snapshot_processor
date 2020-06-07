@@ -44,6 +44,23 @@ from zmq.error import ZMQError
 
 from PIL import Image
 
+import botocore
+import os.path
+from botoflow import activity, \
+    activities, \
+    execute, \
+    return_, \
+    workflow_starter, \
+    WorkflowDefinition, \
+    ThreadedWorkflowExecutor, \
+    ThreadedActivityExecutor
+from botoflow.workers.workflow_worker import WorkflowWorker
+from botoflow.workers.activity_worker import ActivityWorker
+from botoflow.constants import MINUTES
+from botoflow.exceptions import ActivityTaskFailedError, \
+    WorkflowFailedError
+
+
 APP = os.path.basename(__file__)
 if sys.stdout.isatty() and os.system('systemctl status app') == 0:
     print("{} is already running. Use 'systemctl stop app' to stop first.".format(APP))
@@ -118,6 +135,15 @@ def make_timestamp(timestamp=None, as_tz=pytz.utc, make_string=False):
     if make_string:
         return timestamp.strftime(DATE_FORMAT)
     return timestamp
+
+
+@activities(schedule_to_start_timeout=1*MINUTES,
+            start_to_close_timeout=1*MINUTES)
+class SnapshotActivity(object):
+
+    @activity('1.0')
+    def snapshot_camera(self, device_key, camera_command):
+        log.info("snapshot camera {} using {}".format(device_key, camera_command))
 
 
 class Uploader(Thread):
@@ -902,6 +928,14 @@ if __name__ == "__main__":
         stream_handler = logging.StreamHandler(stream=sys.stdout)
         stream_handler.setFormatter(formatter)
         log.addHandler(stream_handler)
+    # connect to SWF
+    boto_session = botocore.session.Session(profile=config.get('botoflow', 'profile'))
+    swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
+                                            config.get('botoflow', 'region'),
+                                            config.get('botoflow', 'domain'),
+                                            'snapshot',
+                                            SnapshotActivity()))
+    swf_worker.start()
     # file system listener
     observer = Observer()
     observer.name = observer.__class__.__name__
@@ -1015,10 +1049,16 @@ if __name__ == "__main__":
             ))
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
-        log.info("Shutting down...")
+        message = "Shutting down {}..."
+        log.info(message.format('SWF activity worker'))
+        swf_worker.stop()
+        swf_worker.join()
+        log.info(message.format('Application threads'))
         observer.stop()
         observer.join()
         upload_event_handler.close()
         # since this thread and the signal handler are one and the same
         uploader_socket.close()
+        log.info(message.format('ZMQ context'))
         zmq_context.term()
+        log.info('Shutdown complete.')

@@ -1,6 +1,7 @@
 PyDrive
 argparse
 awscli
+botoflow
 face_recognition
 numpy
 opencv-python
