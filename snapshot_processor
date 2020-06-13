@@ -981,7 +981,9 @@ if __name__ == "__main__":
                 device_key=device_key,
                 device_type=input_type,
                 device_location=input_location,
-                image_dir=os.path.join(config.get('snapshots', 'upload_dir'), input_location.lower()))
+                image_dir=os.path.join(
+                    config.get('snapshots', 'upload_dir'),
+                    input_location.lower().replace(' ', '')))
     device_info['outputs'] = list()
     camera_profiles = {}
     for field, output_type in list(output_types.items()):
