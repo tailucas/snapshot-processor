@@ -35,6 +35,7 @@ from socket import error as socket_error
 from ssl import SSLEOFError
 from threading import Thread
 from time import sleep
+from traceback import StackSummary
 from urllib.request import pathname2url
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
@@ -83,6 +84,7 @@ cloud_storage = None
 
 zmq_context = zmq.Context()
 zmq_context.setsockopt(zmq.LINGER, 0)
+shutting_down = False
 
 URL_WORKER_SNAPSHOT = 'inproc://snapshot'
 URL_WORKER_UPLOADER = 'inproc://uploader'
@@ -930,8 +932,14 @@ def thread_nanny(threads_tracked, signal_handler):
         if len(threads_tracked - threads_alive) > 0:
             message = 'A thread has died. Expected threads are [{}], missing is [{}].'.format(threads_tracked, threads_tracked - threads_alive)
             log.fatal(message)
-            os._exit(1)
-        time.sleep(10)
+            shutting_down = True
+        else:
+            sleep(10)
+
+
+def swf_exception_handler(err: Exception, tb_list: StackSummary):
+    log.fatal('SWF processing exception: {} {}'.format(err, tb_list.format()))
+    shutting_down = True
 
 
 if __name__ == "__main__":
@@ -954,6 +962,7 @@ if __name__ == "__main__":
                                             config.get('botoflow', 'domain'),
                                             'snapshot',
                                             swf_activity))
+    swf_worker._worker.unhandled_exception_handler = swf_exception_handler
     swf_worker.start()
     # file system listener
     observer = Observer()
@@ -1069,6 +1078,8 @@ if __name__ == "__main__":
                 }
             ))
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            if shutting_down:
+                raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
         message = "Shutting down {}..."
         log.info(message.format('SWF activity worker'))
