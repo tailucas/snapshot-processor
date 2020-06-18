@@ -727,6 +727,10 @@ class GoogleDriveUploader(GoogleDriveManager):
             try:
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
                 if os.path.exists(snapshot_path):
+                    # FIXME: small delay to ensure that file is complete and
+                    # closed before attempting upload
+                    if time.time() - os.path.getmtime(snapshot_path) <= 2:
+                        sleep(1)
                     self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
             except ContextTerminated:
                 self.socket.close()
