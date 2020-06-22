@@ -3,6 +3,7 @@ argparse
 awscli
 botoflow
 face_recognition
+netifaces
 numpy
 opencv-python
 pathtools
