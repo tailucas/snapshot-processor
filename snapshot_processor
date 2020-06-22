@@ -5,6 +5,7 @@ import logging.handlers
 
 import copy
 import face_recognition
+import netifaces
 import os
 import pytz
 import requests
@@ -137,6 +138,15 @@ def make_timestamp(timestamp=None, as_tz=pytz.utc, make_string=False):
     if make_string:
         return timestamp.strftime(DATE_FORMAT)
     return timestamp
+
+
+@activities(schedule_to_start_timeout=1*MINUTES,
+            start_to_close_timeout=1*MINUTES)
+class DeviceInfoActivity(object):
+
+    @activity('1.0')
+    def get_ip_address(self):
+        return netifaces.gateways()['default'][netifaces.AF_INET][0]
 
 
 @activities(schedule_to_start_timeout=1*MINUTES,
