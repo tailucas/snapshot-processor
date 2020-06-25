@@ -970,11 +970,12 @@ if __name__ == "__main__":
         log.addHandler(stream_handler)
     # connect to SWF
     boto_session = botocore.session.Session(profile=config.get('botoflow', 'profile'))
+    swf_activity = SnapshotActivity(URL_WORKER_SNAPSHOT)
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
                                             config.get('botoflow', 'region'),
                                             config.get('botoflow', 'domain'),
                                             'snapshot',
-                                            SnapshotActivity(URL_WORKER_SNAPSHOT), DeviceInfoActivity()))
+                                            swf_activity, DeviceInfoActivity()))
     swf_worker._worker.unhandled_exception_handler = swf_exception_handler
     swf_worker.start()
     # file system listener
