@@ -960,6 +960,7 @@ class SignalHandler:
 
 
 def thread_nanny(threads_tracked, signal_handler):
+    global shutting_down
     while True:
         # kill the nanny now
         if signal_handler.last_signal == signal.SIGTERM:
@@ -977,6 +978,7 @@ def thread_nanny(threads_tracked, signal_handler):
 
 
 def swf_exception_handler(err: Exception, tb_list: StackSummary):
+    global shutting_down
     log.fatal('SWF processing exception: {} {}'.format(err, tb_list.format()))
     shutting_down = True
 
@@ -1109,6 +1111,8 @@ if __name__ == "__main__":
         google_drive_archiver.start()
         threads_tracked.add(google_drive_archiver.getName())
         while True:
+            if shutting_down:
+                raise RuntimeWarning("Shutting down...")
             uploader_socket.send_pyobj((
                 None,  # timestamp
                 {
@@ -1117,8 +1121,6 @@ if __name__ == "__main__":
                 }
             ))
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
-            if shutting_down:
-                raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
         message = "Shutting down {}..."
         log.info(message.format('SWF activity worker'))
@@ -1135,4 +1137,6 @@ if __name__ == "__main__":
         uploader_socket.close()
         log.info(message.format('ZMQ context'))
         zmq_context.term()
+        log.info(message.format('SWF worker'))
+        swf_worker.join()
         log.info('Shutdown complete.')
