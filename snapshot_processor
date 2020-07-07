@@ -133,7 +133,7 @@ def make_timestamp(timestamp=None, as_tz=pytz.utc, make_string=False):
         # now adjust to requested TZ
         new_timestamp = timestamp.astimezone(tz=as_tz)
         #TODO: fixme
-        log.info('{} adjusted to {} ({} to {})'.format(timestamp, new_timestamp, timestamp.tzinfo, as_tz))
+        log.info('DEBUG: {} adjusted to {} ({} to {})'.format(timestamp, new_timestamp, timestamp.tzinfo, as_tz))
         timestamp = new_timestamp
     if make_string:
         return timestamp.strftime(DATE_FORMAT)
@@ -273,11 +273,9 @@ class DeviceActivator(Thread):
             try:
                 event = umsgpack.unpackb(self.listener.recv())
                 if 'timestamp' in event:
-                    #TODO: fixme
-                    log.info('DEBUG: received timestamp {}'.format(event['timestamp']))
+                    log.debug('Received timestamp {}'.format(event['timestamp']))
                     timestamp = make_timestamp(timestamp=event['timestamp'], as_tz=tz.tzlocal())
-                    # TODO: fixme
-                    log.info('DEBUG: transmuted timestamp to {}'.format(timestamp))
+                    log.debug('Local timestamp {}'.format(timestamp))
                 else:
                     timestamp = make_timestamp(as_tz=tz.tzlocal())
                 if 'data' not in event:
@@ -906,8 +904,7 @@ class UploadEventHandler(FileSystemEventHandler):
                             date_string = file_base_name.split('_')[1]
                         else:
                             date_string = file_base_name
-                        #TODO: fixme
-                        log.info('DEBUG: setting device event timestamp to {}'.format(date_string))
+                        log.debug('Setting device event timestamp to {}'.format(date_string))
                         device_event.timestamp = date_string
                         # TODO: fixme
                         log.info('DEBUG: device event timestamp is now {}'.format(device_event.timestamp))
