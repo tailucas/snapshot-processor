@@ -1107,9 +1107,7 @@ if __name__ == "__main__":
         # start the Google Driver archiver last
         google_drive_archiver.start()
         threads_tracked.add(google_drive_archiver.getName())
-        while True:
-            if shutting_down:
-                raise RuntimeWarning("Shutting down...")
+        while not shutting_down:
             uploader_socket.send_pyobj((
                 None,  # timestamp
                 {
@@ -1118,6 +1116,7 @@ if __name__ == "__main__":
                 }
             ))
             time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
         message = "Shutting down {}..."
         log.info(message.format('SWF activity worker'))
