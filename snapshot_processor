@@ -688,13 +688,17 @@ class UploadEventHandler(FileSystemEventHandler):
                         log.info('{} from {}'.format(device_event, snapshot_path))
                         file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
                         if '_' in file_base_name:
-                            date_string = file_base_name.split('_')[1]
+                            date_string = ' '.join(file_base_name.split('_')[1:])
                         else:
                             date_string = file_base_name
-                        log.debug('Setting device event timestamp to {}'.format(date_string))
-                        device_event.timestamp = date_string
-                        # TODO: fixme
-                        log.info('DEBUG: device event timestamp is now {}'.format(device_event.timestamp))
+                        log.debug('Attempting to parse {}'.format(date_string))
+                        try:
+                            device_event.timestamp = make_timestamp(
+                                timestamp=dateutil.parser.parse(date_string),
+                                make_string=True)
+                        except ValueError:
+                            log.exception('Unable to parse {}, fallback to current time.'.format(date_string))
+                            device_event.timestamp = make_timestamp(make_string=True)
                         try:
                             # do not notify for fetched image data
                             if 'fetch' not in snapshot_path:
