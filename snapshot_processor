@@ -3,12 +3,15 @@ import dateutil.parser
 import logging
 import logging.handlers
 
+import boto3
+import builtins
 import copy
 import face_recognition
 import netifaces
 import os
 import pytz
 import requests
+import sentry_sdk
 import signal
 import sys
 import threading
@@ -29,7 +32,6 @@ from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
-from raven import Client as Sentry
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException
 from socket import error as socket_error
@@ -63,244 +65,29 @@ from botoflow.exceptions import ActivityTaskFailedError, \
     WorkflowFailedError, WorkflowTimedOutError
 
 
-APP = os.path.basename(__file__)
-if sys.stdout.isatty() and os.system('systemctl status app') == 0:
-    print("{} is already running. Use 'systemctl stop app' to stop first.".format(APP))
-    sys.exit(1)
+builtins.APP_NAME = os.path.basename(__file__)
+builtins.SENTRY_EXTRAS = []
+import pylib
 
-# set the working directory for libraries that assume this (such as PyDrive)
-DIR = os.path.abspath(os.path.dirname(__file__))
-os.chdir(DIR)
-log = logging.getLogger(APP)
-# do not propagate to console logging
-log.propagate = False
+from pylib.bluetooth import bluetooth_init, ping_bluetooth_devices
+from pylib.datetime import is_list, make_timestamp, parse_datetime
+from pylib.data import make_payload
+from pylib.aws.metrics import post_count_metric
+from pylib.aws.swf import SWFActivityWaiter, \
+    swf_exception_handler, \
+    SnapshotActivity, \
+    DeviceInfoActivity, \
+    DeviceWorkflow, \
+    SnapshotWorkflow
+from pylib.process import SignalHandler, exec_cmd
+from pylib.threads import thread_nanny
+from pylib.zmq import Uploader, DeviceActivator
 
-config = ConfigParser()
-config.optionxform = str
-config.read([os.path.join(DIR, '{}.conf'.format(APP))])
 
-snapshot_root = config.get('snapshots', 'root_dir')
-
-cloud_storage = None
-
-zmq_context = zmq.Context()
-zmq_context.setsockopt(zmq.LINGER, 0)
-shutting_down = False
-
-URL_WORKER_SNAPSHOT = 'inproc://snapshot'
-URL_WORKER_UPLOADER = 'inproc://uploader'
 URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
-DATE_FORMAT = '%Y-%m-%dT%H:%M:%S.%f%z'
 
 HEARTBEAT_INTERVAL_SECONDS = 5
-
-sentry = Sentry()
-
-# lifted from the defunct https://github.com/baudm/mplayer.py/blob/master/mplayer/core.py
-mplayer = ['mplayer',
-           '-slave',
-           '-idle',
-           '-really-quiet',
-           '-nolirc',
-           '-msglevel', 'global=4',
-           '-input', 'nodefault-bindings',
-           '-noconfig', 'all']
-
-
-def make_timestamp(timestamp=None, as_tz=pytz.utc, make_string=False):
-    if timestamp is None:
-        timestamp = datetime.utcnow().replace(tzinfo=pytz.utc)
-    elif isinstance(timestamp, float) or isinstance(timestamp, int):
-        timestamp = datetime.utcfromtimestamp(timestamp).replace(tzinfo=pytz.utc)
-    elif isinstance(timestamp, str):
-        try:
-            timestamp = dateutil.parser.parse(timestamp)
-            log.debug('Parsed timestamp is {}'.format(timestamp))
-        except ValueError:
-            try:
-                timestamp = datetime.utcfromtimestamp(int(timestamp)).replace(tzinfo=pytz.utc)
-                log.debug('Parsed integer timestamp is {}'.format(timestamp))
-            except ValueError:
-                raise RuntimeError("Unknown date/time type: '{}'".format(timestamp))
-    if timestamp.tzinfo is None:
-        local_tz = tz.tzlocal()
-        #TODO: fixme
-        log.info('{}: fixed to local time {}'.format(timestamp, local_tz))
-        # we use the default specific to the physical locality of the devices
-        timestamp = timestamp.replace(tzinfo=local_tz)
-    if timestamp.tzinfo != as_tz:
-        # now adjust to requested TZ
-        new_timestamp = timestamp.astimezone(tz=as_tz)
-        #TODO: fixme
-        log.info('DEBUG: {} adjusted to {} ({} to {})'.format(timestamp, new_timestamp, timestamp.tzinfo, as_tz))
-        timestamp = new_timestamp
-    if make_string:
-        return timestamp.strftime(DATE_FORMAT)
-    return timestamp
-
-
-@activities(schedule_to_start_timeout=1*MINUTES,
-            start_to_close_timeout=1*MINUTES)
-class DeviceInfoActivity(object):
-
-    @activity(version='1.1', start_to_close_timeout=5*SECONDS)
-    def get_ip_address(self):
-        ipv4_address = None
-        lan_iface = None
-        default_gateway_ipv4_iface = None
-        # use the gateway data to find the LAN device from which IP is determined
-        default_gateway_ipv4 = netifaces.gateways()['default'][netifaces.AF_INET]
-        if default_gateway_ipv4 is not None and len(default_gateway_ipv4) > 0:
-            default_gateway_ipv4_address = default_gateway_ipv4[0]
-            default_gateway_ipv4_iface = default_gateway_ipv4[1]
-            log.info('Gateway address is {} on {}'.format(default_gateway_ipv4_address, default_gateway_ipv4_iface))
-            lan_iface = default_gateway_ipv4_iface
-        else:
-            # go old-skool
-            ifaces = netifaces.interfaces()
-            # put wlan at the end
-            ifaces.sort()
-            for iface in ifaces:
-                if iface.lower().startswith(("et", "en", "wlan")):
-                    try:
-                        netifaces.ifaddresses(iface)[netifaces.AF_INET]
-                    except KeyError:
-                        next
-                    lan_iface = iface
-                    break
-        ipv4_address = netifaces.ifaddresses(lan_iface)[netifaces.AF_INET][0]['addr']
-        log.info('Using IPv4 address {} on {}'.format(ipv4_address, lan_iface))
-        return ipv4_address
-
-
-@activities(schedule_to_start_timeout=1*MINUTES,
-            start_to_close_timeout=1*MINUTES)
-class SnapshotActivity(object):
-
-    def __init__(self, zmq_url):
-        self._zmq_url = zmq_url
-        self._zmq_worker = None
-
-    @activity(version='1.0', start_to_close_timeout=30*SECONDS)
-    def snapshot_camera(self, device_key, camera_command):
-        try:
-            # create ZMQ socket and use on the correct thread
-            if (self._zmq_worker is None):
-                self._zmq_worker = zmq_context.socket(zmq.PUSH)
-                self._zmq_worker.connect(self._zmq_url)
-            self._zmq_worker.send_pyobj((device_key, camera_command))
-        except Exception:
-            log.exception(self.__class__.__name__)
-            sentry.captureException()
-            raise
-
-    def stop(self):
-        # create ZMQ socket and use on the correct thread
-        if (self._zmq_worker is not None):
-            self._zmq_worker.close()
-
-
-class Uploader(Thread):
-
-    def __init__(self):
-        super(Uploader, self).__init__(name=self.__class__.__name__)
-        self.daemon = True
-        # inproc socket to accept messages to publish
-        # to the outside world
-        self.inproc_pull = zmq_context.socket(zmq.PULL)
-        self.inproc_pull.bind(URL_WORKER_UPLOADER)
-
-    def run(self):
-        # Socket to talk to the outside world
-        publisher = zmq_context.socket(zmq.PUB)
-        try:
-            publisher.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
-                                                      port=config.get('zmq', 'pubsub_port')))
-        except ZMQError:
-            log.exception(self.__class__.__name__)
-            raise
-
-        while True:
-            try:
-                (timestamp, event_data) = self.inproc_pull.recv_pyobj()
-                publisher.send(Uploader.make_payload(timestamp, event_data))
-            except ContextTerminated:
-                self.inproc_pull.close()
-                publisher.close()
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                sentry.captureException()
-                sleep(1)
-                continue
-
-    @staticmethod
-    def make_payload(timestamp=None, data=None):
-        send_timestamp = make_timestamp(timestamp=timestamp, make_string=True)
-        log.debug('Payload timestamp {}'.format(send_timestamp))
-        payload = {'timestamp': send_timestamp}
-        if data is not None and len(data) > 0:
-            payload['data'] = data
-        #TODO: fix me for small payloads
-        #log.debug(json.dumps(payload))
-        return umsgpack.packb(payload)
-
-
-class DeviceActivator(Thread):
-
-    def __init__(self):
-        super(DeviceActivator, self).__init__(name=self.__class__.__name__)
-        self.daemon = True
-
-        self.listener = zmq_context.socket(zmq.PULL)
-        # to create snapshots
-        self.snapshot = zmq_context.socket(zmq.PUSH)
-
-    def run(self):
-        # outputs
-        self.snapshot.connect(URL_WORKER_SNAPSHOT)
-
-        # Socket to talk to the outside world
-        try:
-            self.listener.bind('tcp://{ip}:{port}'.format(ip=config.get('app', 'eth0_ip'),
-                                                          port=config.get('zmq', 'pushpull_port')))
-        except ZMQError:
-            log.exception(self.__class__.__name__)
-            raise
-
-        while True:
-            try:
-                event = umsgpack.unpackb(self.listener.recv())
-                if 'timestamp' in event:
-                    log.debug('Received timestamp {}'.format(event['timestamp']))
-                    timestamp = make_timestamp(timestamp=event['timestamp'], as_tz=tz.tzlocal())
-                    log.debug('Local timestamp {}'.format(timestamp))
-                else:
-                    timestamp = make_timestamp(as_tz=tz.tzlocal())
-                if 'data' not in event:
-                    log.warning('Unknown event data: {}'.format(event))
-                    continue
-                event_data = event['data']
-                if 'trigger_output' in event_data:
-                    trigger_output = event_data['trigger_output']
-                    output_type = trigger_output['type']
-                    if output_type.lower() == 'camera':
-                        log.info("Camera snapshot '{}'".format(trigger_output['device_label']))
-                        trigger_output.update({'timestamp': timestamp})
-                        self.snapshot.send_pyobj(trigger_output)
-                    else:
-                        log.error('Unconfigured output type {} for input context {}'.format(output_type, event_data))
-                        continue
-            except ContextTerminated:
-                self.listener.close()
-                self.snapshot.close()
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                sentry.captureException()
-                sleep(1)
-                continue
 
 
 class FileType(object):
@@ -332,13 +119,13 @@ class Snapshot(Thread):
         self.daemon = True
 
         self.cameras = camera_profiles
-        self.default_command = config.get('camera', 'default_command')
-        self.default_image_format = config.get('camera', 'default_image_format')
+        self.default_command = APP_CONFIG.get('camera', 'default_command')
+        self.default_image_format = APP_CONFIG.get('camera', 'default_image_format')
 
         self.cloud_storage_url = cloud_storage_url
 
         self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.bind(URL_WORKER_SNAPSHOT)
+        self.socket.bind(URL_WORKER_APP)
 
         self.uploader = zmq_context.socket(zmq.PUSH)
         self.uploader.connect(URL_WORKER_UPLOADER)
@@ -417,13 +204,13 @@ class FaceDetector(Thread):
         self.daemon = True
 
         self.cameras = camera_profiles
-        self.default_command = config.get('camera', 'default_command')
-        self.default_image_format = config.get('camera', 'default_image_format')
+        self.default_command = APP_CONFIG.get('camera', 'default_command')
+        self.default_image_format = APP_CONFIG.get('camera', 'default_image_format')
 
         self.cloud_storage_url = cloud_storage_url
 
         self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.bind(URL_WORKER_SNAPSHOT)
+        self.socket.bind(URL_WORKER_APP)
 
         self.uploader = zmq_context.socket(zmq.PUSH)
         self.uploader.connect(URL_WORKER_UPLOADER)
@@ -626,7 +413,7 @@ class GoogleDriveManager(Thread, CloudStorage):
                 return None
             log.debug("Creating Google Drive folder '{}' in parent folder '{}'".format(gdrive_folder, parent_id))
             folder = gdrive.CreateFile({
-                'description': "Created by {}".format(APP), 'title': gdrive_folder,
+                'description': "Created by {}".format(APP_NAME), 'title': gdrive_folder,
                 'mimeType': 'application/vnd.google-apps.folder',
                 'parents': [{"kind": "drive#parentReference", "id": parent_id}]
             })
@@ -935,70 +722,13 @@ class UploadEventHandler(FileSystemEventHandler):
                     sleep(1)
 
 
-class SignalHandler:
-
-    def __init__(self):
-        self.last_signal = 0
-        signal.signal(signal.SIGTERM, self.terminate)
-        signal.signal(signal.SIGHUP, self.hup)
-
-    def hup(self, signum, frame):
-        log.warning('Signal {} received.'.format(signum))
-        self.last_signal = signum
-        if log.getEffectiveLevel() == logging.INFO:
-            log.setLevel(logging.DEBUG)
-        elif log.getEffectiveLevel() == logging.DEBUG:
-            log.setLevel(logging.INFO)
-
-    def terminate(self, signum, frame):
-        log.warning('Signal {} received.'.format(signum))
-        self.last_signal = signum
-        raise RuntimeWarning()
-
-
-def thread_nanny(threads_tracked, signal_handler):
-    global shutting_down
-    while True:
-        # kill the nanny now
-        if signal_handler.last_signal == signal.SIGTERM:
-            break
-        threads_alive = set()
-        for thread_info in threading.enumerate():
-            if thread_info.isAlive():
-                threads_alive.add(thread_info.getName())
-        if len(threads_tracked - threads_alive) > 0:
-            message = 'A thread has died. Expected threads are [{}], missing is [{}].'.format(threads_tracked, threads_tracked - threads_alive)
-            log.fatal(message)
-            shutting_down = True
-        else:
-            sleep(10)
-
-
-def swf_exception_handler(err: Exception, tb_list: StackSummary):
-    global shutting_down
-    log.fatal('SWF processing exception: {} {}'.format(err, tb_list.format()))
-    shutting_down = True
-
-
 if __name__ == "__main__":
-    # DEBUG logging until startup complete
-    log.setLevel(logging.DEBUG)
-    syslog_handler = logging.handlers.SysLogHandler(address='/dev/log')
-    formatter = logging.Formatter('%(name)s [%(levelname)s] %(message)s')
-    syslog_handler.setFormatter(formatter)
-    log.addHandler(syslog_handler)
-    if sys.stdout.isatty():
-        log.warning("Using console logging because there is a tty.")
-        stream_handler = logging.StreamHandler(stream=sys.stdout)
-        stream_handler.setFormatter(formatter)
-        log.addHandler(stream_handler)
     # connect to SWF
-    boto_session = botocore.session.Session(profile=config.get('botoflow', 'profile'))
-    swf_activity = SnapshotActivity(URL_WORKER_SNAPSHOT)
+    swf_activity = SnapshotActivity(URL_WORKER_APP)
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
-                                            config.get('botoflow', 'region'),
-                                            config.get('botoflow', 'domain'),
-                                            APP,
+                                            swf_region,
+                                            swf_domain,
+                                            APP_NAME,
                                             swf_activity, DeviceInfoActivity()))
     swf_worker._worker.unhandled_exception_handler = swf_exception_handler
     swf_worker.start()
@@ -1007,12 +737,12 @@ if __name__ == "__main__":
     observer.name = observer.__class__.__name__
     upload_event_handler = UploadEventHandler(fs_observer=observer)
     # construct the device representation
-    input_types = dict(config.items('input_type'))
-    input_locations = dict(config.items('input_location'))
-    output_types = dict(config.items('output_type'))
-    output_locations = dict(config.items('output_location'))
-    camera_urls = dict(config.items('camera_url'))
-    camera_auths = dict(config.items('camera_auth'))
+    input_types = dict(APP_CONFIG.items('input_type'))
+    input_locations = dict(APP_CONFIG.items('input_location'))
+    output_types = dict(APP_CONFIG.items('output_type'))
+    output_locations = dict(APP_CONFIG.items('output_location'))
+    camera_urls = dict(APP_CONFIG.items('camera_url'))
+    camera_auths = dict(APP_CONFIG.items('camera_auth'))
     device_info = dict()
     device_info['inputs'] = list()
     for field, input_type in list(input_types.items()):
@@ -1029,7 +759,7 @@ if __name__ == "__main__":
                 device_type=input_type,
                 device_location=input_location,
                 image_dir=os.path.join(
-                    config.get('snapshots', 'upload_dir'),
+                    APP_CONFIG.get('snapshots', 'upload_dir'),
                     input_location.lower().replace(' ', '')))
     device_info['outputs'] = list()
     camera_profiles = {}
@@ -1052,14 +782,18 @@ if __name__ == "__main__":
             camera_profile.update({
                 'url': camera_urls[field],
                 'auth': camera_auths[field],
-                'storage': os.path.join(snapshot_root, config.get('snapshots', 'upload_dir'), output_location.lower())
+                'storage': os.path.join(snapshot_root, APP_CONFIG.get('snapshots', 'upload_dir'), output_location.lower())
             })
             camera_profiles[device_key] = camera_profile
     log.info('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # threads that we want to ensure are alive
-    threads_tracked = set()
-    uploader = Uploader()
+    uploader = Uploader(
+        zmq_context=zmq_context,
+        zmq_ipc_url=URL_WORKER_UPLOADER,
+        pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
+        pub_port=APP_CONFIG.get('zmq', 'pubsub_port'))
+
     uploader.start()
     threads_tracked.add(uploader.getName())
     # top-level types
@@ -1067,11 +801,11 @@ if __name__ == "__main__":
     # ensure that auth is properly set up first
     try:
         google_drive_uploader = GoogleDriveUploader(
-            gauth_creds_file=config.get('gdrive', 'creds_file'),
-            gdrive_folder=config.get('gdrive', 'folder'))
+            gauth_creds_file=APP_CONFIG.get('gdrive', 'creds_file'),
+            gdrive_folder=APP_CONFIG.get('gdrive', 'folder'))
         google_drive_archiver = GoogleDriveArchiver(
-            gauth_creds_file=config.get('gdrive', 'creds_file'),
-            gdrive_folder=config.get('gdrive', 'folder'),
+            gauth_creds_file=APP_CONFIG.get('gdrive', 'creds_file'),
+            gdrive_folder=APP_CONFIG.get('gdrive', 'folder'),
             gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
             gdrive_folder_url=google_drive_uploader.cloud_storage_url)
     except Exception:
@@ -1087,12 +821,17 @@ if __name__ == "__main__":
     observer.start()
     threads_tracked.add(observer.getName())
     # finish with the device activator
-    device_activator = DeviceActivator()
+    device_activator = DeviceActivator(
+        zmq_context=zmq_context,
+        zmq_ipc_url=URL_WORKER_APP,
+        pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
+        pub_port=APP_CONFIG.get('zmq', 'pushpull_port'))
     device_activator.start()
     threads_tracked.add(device_activator.getName())
-    # app plumbing
+    # must be main thread
     signal_handler = SignalHandler()
-    f = threading.Thread(name='nanny', target=thread_nanny, args=(threads_tracked, signal_handler,))
+    # start the nanny
+    f = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
     f.setDaemon(True)
     f.start()
     uploader_socket = zmq_context.socket(zmq.PUSH)

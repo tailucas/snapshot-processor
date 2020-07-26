@@ -1,6 +1,7 @@
 PyDrive
 argparse
 awscli
+boto3
 botoflow
 face_recognition
 netifaces
@@ -12,8 +13,9 @@ python-dateutil
 python-magic
 pytz
 pyzmq
-raven
 requests
+sentry-sdk
+simplejson
 u-msgpack-python
 watchdog
 watson-developer-cloud
