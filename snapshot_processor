@@ -306,16 +306,16 @@ class DeviceEvent(object):
     @property
     def timestamp(self):
         if self._timestamp is None:
-            self._timestamp = make_timestamp()
+            self._timestamp = make_timestamp(make_string=True)
         return self._timestamp
 
     @timestamp.setter
     def timestamp(self, value):
-        self._timestamp = make_timestamp(timestamp=value, as_tz=tz.tzlocal())
+        self._timestamp = value
 
     @property
     def timestamp_string(self):
-        return self.timestamp.strftime(ISO_DATE_FORMAT)
+        return self.timestamp
 
     @property
     def event_detail(self):
