@@ -315,7 +315,7 @@ class DeviceEvent(object):
 
     @property
     def timestamp_string(self):
-        return self.timestamp.strftime(DATE_FORMAT)
+        return self.timestamp.strftime(ISO_DATE_FORMAT)
 
     @property
     def event_detail(self):
@@ -735,7 +735,7 @@ if __name__ == "__main__":
     # file system listener
     observer = Observer()
     observer.name = observer.__class__.__name__
-    snapshot_root = config.get('snapshots', 'root_dir')
+    snapshot_root = APP_CONFIG.get('snapshots', 'root_dir')
     upload_event_handler = UploadEventHandler(snapshot_root=snapshot_root, fs_observer=observer)
     # construct the device representation
     input_types = dict(APP_CONFIG.items('input_type'))
