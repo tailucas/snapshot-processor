@@ -89,7 +89,6 @@ URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 
 HEARTBEAT_INTERVAL_SECONDS = 5
 
-
 class FileType(object):
 
     def __init__(self):
@@ -611,12 +610,13 @@ class GoogleDriveUploader(GoogleDriveManager):
 
 class UploadEventHandler(FileSystemEventHandler):
 
-    def __init__(self, fs_observer):
+    def __init__(self, fs_observer, snapshot_root):
         super(UploadEventHandler, self).__init__()
         self.last_modified = None
         self.device_events = dict()
+        self._snapshot_root = snapshot_root
 
-        fs_observer.schedule(self, snapshot_root, recursive=True)
+        fs_observer.schedule(self, self._snapshot_root, recursive=True)
 
         self.cloud_storage_socket = zmq_context.socket(zmq.PUSH)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
@@ -679,7 +679,7 @@ class UploadEventHandler(FileSystemEventHandler):
             else:
                 return
             # cross-check that we're in the right place
-            if snapshot_path.startswith(snapshot_root):
+            if snapshot_path.startswith(self._snapshot_root):
                 # noinspection PyBroadException
                 try:
                     # image snapshot that can be mapped to a device?
@@ -735,7 +735,8 @@ if __name__ == "__main__":
     # file system listener
     observer = Observer()
     observer.name = observer.__class__.__name__
-    upload_event_handler = UploadEventHandler(fs_observer=observer)
+    snapshot_root = config.get('snapshots', 'root_dir')
+    upload_event_handler = UploadEventHandler(snapshot_root=snapshot_root, fs_observer=observer)
     # construct the device representation
     input_types = dict(APP_CONFIG.items('input_type'))
     input_locations = dict(APP_CONFIG.items('input_location'))
