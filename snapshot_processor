@@ -306,16 +306,16 @@ class DeviceEvent(object):
     @property
     def timestamp(self):
         if self._timestamp is None:
-            self._timestamp = make_timestamp(make_string=True)
+            self._timestamp = make_timestamp()
         return self._timestamp
 
     @timestamp.setter
     def timestamp(self, value):
-        self._timestamp = value
+        self._timestamp = make_timestamp(timestamp=value)
 
     @property
     def timestamp_string(self):
-        return self.timestamp
+        return self.timestamp.strftime(ISO_DATE_FORMAT)
 
     @property
     def event_detail(self):
@@ -691,19 +691,12 @@ class UploadEventHandler(FileSystemEventHandler):
                             date_string = ' '.join(file_base_name.split('_')[1:])
                         else:
                             date_string = file_base_name
-                        log.debug('Attempting to parse {}'.format(date_string))
-                        try:
-                            device_event.timestamp = make_timestamp(
-                                timestamp=dateutil.parser.parse(date_string),
-                                make_string=True)
-                        except ValueError:
-                            log.exception('Unable to parse {}, fallback to current time.'.format(date_string))
-                            device_event.timestamp = make_timestamp(make_string=True)
+                        device_event.timestamp = date_string
                         try:
                             # do not notify for fetched image data
                             if 'fetch' not in snapshot_path:
                                 self.uploader.send_pyobj((
-                                    device_event.timestamp,
+                                    device_event.timestamp_string,
                                     {
                                         'active_devices': [device_event.dict],
                                         'storage_url': self._cloud_storage_url
