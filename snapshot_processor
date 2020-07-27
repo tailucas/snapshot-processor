@@ -80,14 +80,11 @@ from pylib.aws.swf import SWFActivityWaiter, \
     DeviceInfoActivity, \
     DeviceWorkflow, \
     SnapshotWorkflow
-from pylib import process
 from pylib.process import SignalHandler, exec_cmd
 from pylib import threads
 from pylib.threads import thread_nanny
 from pylib.zmq import Uploader, DeviceActivator
 
-
-log = logging.getLogger(Path(__file__).stem)
 
 URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
@@ -849,7 +846,7 @@ if __name__ == "__main__":
         # start the Google Driver archiver last
         google_drive_archiver.start()
         threads.threads_tracked.add(google_drive_archiver.getName())
-        while not process.shutting_down:
+        while not threads.shutting_down:
             uploader_socket.send_pyobj({
                     #TODO statistics
                     'device_info': device_info
@@ -857,6 +854,9 @@ if __name__ == "__main__":
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
+        log.warning(str(e), exc_info=1)
+        threads.shutting_down = True
+        threads.interruptable_sleep.set()
         message = "Shutting down {}..."
         log.info(message.format('SWF activity worker'))
         swf_worker.stop()
