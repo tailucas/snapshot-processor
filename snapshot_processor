@@ -845,14 +845,11 @@ if __name__ == "__main__":
         google_drive_archiver.start()
         threads_tracked.add(google_drive_archiver.getName())
         while not shutting_down:
-            uploader_socket.send_pyobj((
-                None,  # timestamp
-                {
+            uploader_socket.send_pyobj({
                     #TODO statistics
                     'device_info': device_info
-                }
-            ))
-            time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            })
+            interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
         message = "Shutting down {}..."
