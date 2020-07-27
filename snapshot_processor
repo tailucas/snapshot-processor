@@ -28,6 +28,7 @@ from face_recognition import face_locations, load_image_file
 from http.client import BadStatusLine
 from io import BytesIO
 from mimetypes import MimeTypes
+from pathlib import Path
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
@@ -79,10 +80,14 @@ from pylib.aws.swf import SWFActivityWaiter, \
     DeviceInfoActivity, \
     DeviceWorkflow, \
     SnapshotWorkflow
+from pylib import process
 from pylib.process import SignalHandler, exec_cmd
+from pylib import threads
 from pylib.threads import thread_nanny
 from pylib.zmq import Uploader, DeviceActivator
 
+
+log = logging.getLogger(Path(__file__).stem)
 
 URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
@@ -793,7 +798,7 @@ if __name__ == "__main__":
         pub_port=APP_CONFIG.get('zmq', 'pubsub_port'))
 
     uploader.start()
-    threads_tracked.add(uploader.getName())
+    threads.threads_tracked.add(uploader.getName())
     # top-level types
     filetype = FileType()
     # ensure that auth is properly set up first
@@ -814,10 +819,10 @@ if __name__ == "__main__":
     snapshotter = Snapshot(camera_profiles=camera_profiles, cloud_storage_url=google_drive_uploader.cloud_storage_url)
     # start threads
     snapshotter.start()
-    threads_tracked.add(snapshotter.getName())
+    threads.threads_tracked.add(snapshotter.getName())
     # start the collectors
     observer.start()
-    threads_tracked.add(observer.getName())
+    threads.threads_tracked.add(observer.getName())
     # finish with the device activator
     device_activator = DeviceActivator(
         zmq_context=zmq_context,
@@ -825,7 +830,7 @@ if __name__ == "__main__":
         pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
         pub_port=APP_CONFIG.get('zmq', 'pushpull_port'))
     device_activator.start()
-    threads_tracked.add(device_activator.getName())
+    threads.threads_tracked.add(device_activator.getName())
     # must be main thread
     signal_handler = SignalHandler()
     # start the nanny
@@ -840,16 +845,16 @@ if __name__ == "__main__":
         log.setLevel(logging.INFO)
         # start Google Drive uploader
         google_drive_uploader.start()
-        threads_tracked.add(google_drive_uploader.getName())
+        threads.threads_tracked.add(google_drive_uploader.getName())
         # start the Google Driver archiver last
         google_drive_archiver.start()
-        threads_tracked.add(google_drive_archiver.getName())
-        while not shutting_down:
+        threads.threads_tracked.add(google_drive_archiver.getName())
+        while not process.shutting_down:
             uploader_socket.send_pyobj({
                     #TODO statistics
                     'device_info': device_info
             })
-            interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
+            threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
         message = "Shutting down {}..."
