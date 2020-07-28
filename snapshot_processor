@@ -65,8 +65,7 @@ from botoflow.constants import SECONDS, MINUTES
 from botoflow.exceptions import ActivityTaskFailedError, \
     WorkflowFailedError, WorkflowTimedOutError
 
-
-builtins.APP_NAME = os.path.basename(__file__)
+builtins.APP_NAME = Path(__file__).stem
 builtins.SENTRY_EXTRAS = []
 import pylib
 
