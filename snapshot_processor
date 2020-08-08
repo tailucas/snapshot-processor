@@ -256,20 +256,17 @@ class FaceDetector(Thread):
                 log.info('DEBUG: basing {} off of {}'.format(unix_timestamp, timestamp))
                 output_filename = os.path.join(camera_profile['storage'],
                                                'fetch_' + str(unix_timestamp) + '.' + self.default_image_format)
-                self.uploader.send_pyobj((
-                    timestamp,
-                    {
-                        'active_devices': [
-                            {
-                                'device_key': device_key,
-                                'device_label': device_label,
-                                'type': 'camera',
-                                'image': image_data,
-                            }
-                        ],
-                        'storage_url': self.cloud_storage_url
-                    }
-                ))
+                self.uploader.send_pyobj({
+                    'active_devices': [
+                        {
+                            'device_key': device_key,
+                            'device_label': device_label,
+                            'type': 'camera',
+                            'image': image_data,
+                        }
+                    ],
+                    'storage_url': self.cloud_storage_url
+                })
                 log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
                 # persist for Cloud
                 im.save(output_filename)
