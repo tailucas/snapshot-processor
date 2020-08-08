@@ -166,7 +166,7 @@ class Snapshot(Thread):
                         if tries >= 3:
                             log.exception("Giving up getting image from {} after {} tries.".format(camera_profile['url'],
                                                                                                    tries))
-                            continue
+                            break
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
                 output_filename = os.path.join(camera_profile['storage'],
@@ -783,7 +783,10 @@ if __name__ == "__main__":
             camera_profile.update({
                 'url': camera_urls[field],
                 'auth': camera_auths[field],
-                'storage': os.path.join(snapshot_root, APP_CONFIG.get('snapshots', 'upload_dir'), output_location.lower())
+                'storage': os.path.join(
+                    snapshot_root, 
+                    APP_CONFIG.get('snapshots', 'upload_dir'), 
+                    output_location.lower().replace(' ', ''))
             })
             camera_profiles[device_key] = camera_profile
     log.info('Monitoring directories in {} for changes: {}'.format(
