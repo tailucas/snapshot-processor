@@ -194,7 +194,7 @@ class Snapshot(Thread):
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
-                sentry.captureException()
+                capture_exception()
                 sleep(1)
                 continue
 
@@ -276,7 +276,7 @@ class FaceDetector(Thread):
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
-                sentry.captureException()
+                capture_exception()
                 sleep(1)
                 continue
 
@@ -556,7 +556,7 @@ class GoogleDriveUploader(GoogleDriveManager):
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
-                sentry.captureException()
+                capture_exception()
                 sleep(1)
                 continue
 
@@ -715,7 +715,7 @@ class UploadEventHandler(FileSystemEventHandler):
                         log.warning("Ignored unmapped path event: {}".format(snapshot_path))
                 except Exception:
                     log.exception('Cannot process {}'.format(snapshot_path))
-                    sentry.captureException()
+                    capture_exception()
                     sleep(1)
 
 
