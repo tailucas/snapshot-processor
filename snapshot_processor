@@ -172,91 +172,6 @@ class Snapshot(Thread):
                 log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
                 output_filename = os.path.join(camera_profile['storage'],
                                                'fetch_' + str(unix_timestamp) + '.' + self.default_image_format)
-                self.uploader.send_pyobj((
-                    make_timestamp(timestamp=timestamp, make_string=True),
-                    {
-                        'active_devices': [
-                            {
-                                'device_key': device_key,
-                                'device_label': device_label,
-                                'type': 'camera',
-                                'image': image_data,
-                            }
-                        ],
-                        'storage_url': self.cloud_storage_url
-                    }
-                ))
-                log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
-                # persist for Cloud
-                im.save(output_filename)
-            except ContextTerminated:
-                self.socket.close()
-                self.uploader.close()
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                capture_exception()
-                sleep(1)
-                continue
-
-
-class FaceDetector(Thread):
-
-    def __init__(self, camera_profiles, cloud_storage_url):
-        super(FaceDetector, self).__init__(name=self.__class__.__name__)
-        self.daemon = True
-
-        self.cameras = camera_profiles
-        self.default_command = APP_CONFIG.get('camera', 'default_command')
-        self.default_image_format = APP_CONFIG.get('camera', 'default_image_format')
-
-        self.cloud_storage_url = cloud_storage_url
-
-        self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.bind(URL_WORKER_APP)
-
-        self.uploader = zmq_context.socket(zmq.PUSH)
-        self.uploader.connect(URL_WORKER_UPLOADER)
-
-    def run(self):
-        while True:
-            try:
-                output_trigger = self.socket.recv_pyobj()
-                timestamp = output_trigger['timestamp']
-                device_key = output_trigger['device_key']
-                device_label = output_trigger['device_label']
-                if device_key not in self.cameras:
-                    log.error("Camera configuration missing for '{}.'".format(device_label))
-                    continue
-                camera_profile = self.cameras[device_key]
-                camera_command = self.default_command
-                if 'device_params' in output_trigger:
-                    camera_command = output_trigger['device_params']
-                # unclear whether cam supports requests auth header
-                camera_auth_user, camera_auth_password = camera_profile['auth'].split(':')
-                for tries in range(1, 4):
-                    try:
-                        r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_profile['url']), params={
-                            'cmd': camera_command,
-                            'usr': camera_auth_user,
-                            'pwd': camera_auth_password,
-                        })
-                        image_data = r.content
-                        im = Image.open(BytesIO(image_data))
-                        break
-                    except (OSError, ConnectionError, RequestException):
-                        log.warning("Problem getting image from {}. Retrying...".format(camera_profile['url']),
-                                    exc_info=1)
-                        sleep(0.1)
-                        if tries >= 3:
-                            log.exception("Giving up getting image from {} after {} tries.".format(camera_profile['url'],
-                                                                                                   tries))
-                            continue
-                unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
-                #TODO: fixme
-                log.info('DEBUG: basing {} off of {}'.format(unix_timestamp, timestamp))
-                output_filename = os.path.join(camera_profile['storage'],
-                                               'fetch_' + str(unix_timestamp) + '.' + self.default_image_format)
                 self.uploader.send_pyobj({
                     'active_devices': [
                         {
@@ -696,13 +611,10 @@ class UploadEventHandler(FileSystemEventHandler):
                         try:
                             # do not notify for fetched image data
                             if 'fetch' not in snapshot_path:
-                                self.uploader.send_pyobj((
-                                    device_event.timestamp_string,
-                                    {
-                                        'active_devices': [device_event.dict],
-                                        'storage_url': self._cloud_storage_url
-                                    }
-                                ))
+                                self.uploader.send_pyobj({
+                                    'active_devices': [device_event.dict],
+                                    'storage_url': self._cloud_storage_url
+                                })
                             # upload the image snapshot to Cloud
                             self.cloud_storage_socket.send_pyobj((
                                 snapshot_path,
@@ -850,8 +762,8 @@ if __name__ == "__main__":
         threads.threads_tracked.add(google_drive_archiver.getName())
         while not threads.shutting_down:
             uploader_socket.send_pyobj({
-                    #TODO statistics
-                    'device_info': device_info
+                #TODO statistics
+                'device_info': device_info
             })
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
