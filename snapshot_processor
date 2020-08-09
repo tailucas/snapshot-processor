@@ -34,7 +34,7 @@ from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
 from requests.adapters import ConnectionError
-from requests.exceptions import 
+from requests.exceptions import RequestException
 from sentry_sdk import capture_exception
 from socket import error as socket_error
 from ssl import SSLEOFError
