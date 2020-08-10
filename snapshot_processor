@@ -86,7 +86,7 @@ from pylib.aws.swf import SWFActivityWaiter, \
 from pylib.process import SignalHandler, exec_cmd
 from pylib import threads
 from pylib.threads import thread_nanny
-from pylib.zmq import Uploader, DeviceActivator
+from pylib.zmq import Publisher, URL_WORKER_PUBLISHER, DeviceActivator
 
 
 URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
@@ -131,8 +131,8 @@ class Snapshot(Thread):
         self.socket = zmq_context.socket(zmq.PULL)
         self.socket.bind(URL_WORKER_APP)
 
-        self.uploader = zmq_context.socket(zmq.PUSH)
-        self.uploader.connect(URL_WORKER_UPLOADER)
+        self.publisher = zmq_context.socket(zmq.PUSH)
+        self.publisher.connect(URL_WORKER_PUBLISHER)
 
     def run(self):
         while True:
@@ -172,7 +172,7 @@ class Snapshot(Thread):
                 log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
                 output_filename = os.path.join(camera_profile['storage'],
                                                'fetch_' + str(unix_timestamp) + '.' + self.default_image_format)
-                self.uploader.send_pyobj({
+                self.publisher.send_pyobj({
                     'active_devices': [
                         {
                             'device_key': device_key,
@@ -188,7 +188,7 @@ class Snapshot(Thread):
                 im.save(output_filename)
             except ContextTerminated:
                 self.socket.close()
-                self.uploader.close()
+                self.publisher.close()
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
@@ -537,8 +537,8 @@ class UploadEventHandler(FileSystemEventHandler):
         self.cloud_storage_socket = zmq_context.socket(zmq.PUSH)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
-        self.uploader = zmq_context.socket(zmq.PUSH)
-        self.uploader.connect(URL_WORKER_UPLOADER)
+        self.publisher = zmq_context.socket(zmq.PUSH)
+        self.publisher.connect(URL_WORKER_PUBLISHER)
 
         self._cloud_storage_url = None
 
@@ -552,7 +552,7 @@ class UploadEventHandler(FileSystemEventHandler):
 
     def close(self):
         self.cloud_storage_socket.close()
-        self.uploader.close()
+        self.publisher.close()
 
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
@@ -611,7 +611,7 @@ class UploadEventHandler(FileSystemEventHandler):
                         try:
                             # do not notify for fetched image data
                             if 'fetch' not in snapshot_path:
-                                self.uploader.send_pyobj({
+                                self.publisher.send_pyobj({
                                     'active_devices': [device_event.dict],
                                     'storage_url': self._cloud_storage_url
                                 })
@@ -621,7 +621,7 @@ class UploadEventHandler(FileSystemEventHandler):
                                 device_event.timestamp
                             ))
                         except ContextTerminated:
-                            self.uploader.close()
+                            self.publisher.close()
                             self.cloud_storage_socket.close()
                             return
                     else:
@@ -702,14 +702,14 @@ if __name__ == "__main__":
     log.info('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
     # threads that we want to ensure are alive
-    uploader = Uploader(
+    publisher = Publisher(
         zmq_context=zmq_context,
-        zmq_ipc_url=URL_WORKER_UPLOADER,
+        zmq_ipc_url=URL_WORKER_PUBLISHER,
         pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
         pub_port=APP_CONFIG.get('zmq', 'pubsub_port'))
 
-    uploader.start()
-    threads.threads_tracked.add(uploader.getName())
+    publisher.start()
+    threads.threads_tracked.add(publisher.getName())
     # top-level types
     filetype = FileType()
     # ensure that auth is properly set up first
@@ -748,8 +748,8 @@ if __name__ == "__main__":
     f = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
     f.setDaemon(True)
     f.start()
-    uploader_socket = zmq_context.socket(zmq.PUSH)
-    uploader_socket.connect(URL_WORKER_UPLOADER)
+    publisher_socket = zmq_context.socket(zmq.PUSH)
+    publisher_socket.connect(URL_WORKER_PUBLISHER)
     try:
         # startup completed
         # back to INFO logging
@@ -761,7 +761,7 @@ if __name__ == "__main__":
         google_drive_archiver.start()
         threads.threads_tracked.add(google_drive_archiver.getName())
         while not threads.shutting_down:
-            uploader_socket.send_pyobj({
+            publisher_socket.send_pyobj({
                 #TODO statistics
                 'device_info': device_info
             })
@@ -783,7 +783,7 @@ if __name__ == "__main__":
         observer.join()
         upload_event_handler.close()
         # since this thread and the signal handler are one and the same
-        uploader_socket.close()
+        publisher_socket.close()
         log.info(message.format('ZMQ context'))
         zmq_context.term()
         log.info(message.format('SWF worker'))
