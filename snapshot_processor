@@ -143,6 +143,7 @@ class Snapshot(Thread):
                 device_label = output_trigger['device_label']
                 if device_key not in self.cameras:
                     log.error("Camera configuration missing for '{}.'".format(device_label))
+                    post_count_metric('Errors')
                     continue
                 camera_profile = self.cameras[device_key]
                 camera_command = self.default_command
@@ -170,6 +171,7 @@ class Snapshot(Thread):
                                 camera_profile['url'],
                                 tries,
                                 repr(e)))
+                            post_count_metric('Errors')
                             break
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
