@@ -466,11 +466,24 @@ class GoogleDriveUploader(GoogleDriveManager):
         while True:
             try:
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
-                if os.path.exists(snapshot_path):
+                if os.path.exists(snapshot_path) and os.path.isfile(snapshot_path):
                     # FIXME: small delay to ensure that file is complete and
                     # closed before attempting upload
-                    if time.time() - os.path.getmtime(snapshot_path) <= 2:
-                        sleep(1)
+                    sleep_delay = 10
+                    max_tries = 12
+                    for tries in range(1, max_tries):
+                        if os.path.getsize(snapshot_path) > 0:
+                            break
+                        if time.time() - os.path.getmtime(snapshot_path) > 300:
+                            break
+                        log.warning('Waiting for {}s (try {} of {}) on empty file {}'.format(
+                            sleep_delay,
+                            tries,
+                            max_tries,
+                            snapshot_path))
+                        sleep(sleep_delay)
+                        if tries >= 3:
+                            break
                     self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
             except ContextTerminated:
                 self.socket.close()
@@ -589,11 +602,6 @@ class UploadEventHandler(FileSystemEventHandler):
         # the file has been written to and has valid content
         if not event.is_directory:
             snapshot_path = event.src_path
-            # remove empty files
-            if os.path.isfile(snapshot_path) and os.path.getsize(snapshot_path) == 0:
-                log.warning('Removing empty file {}'.format(snapshot_path))
-                os.remove(snapshot_path)
-                return
             # de-duplication
             if snapshot_path != self.last_modified:
                 self.last_modified = snapshot_path
