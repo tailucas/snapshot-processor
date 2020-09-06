@@ -726,7 +726,9 @@ class FaceDetector(Thread):
                 else:
                     raise ValueError("No viable image data to use.")
                 # find faces using the specified model
-                faces = face_locations(image, number_of_times_to_upsample=0, model="cnn")
+                faces = face_locations(image)
+                #FIXME: oom-kill
+                #faces = face_locations(image, number_of_times_to_upsample=0, model="cnn")
                 log.info("{} faces detected.".format(len(faces)))
                 face_num = 1
                 for face_location in faces:
