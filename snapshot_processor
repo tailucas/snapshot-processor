@@ -119,6 +119,12 @@ def wait_for_file_content(file_path):
                 break
 
 
+def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
+    return os.path.join(
+        parent_path,
+        "{}_".format(operation) + str(unix_timestamp) + '.' + file_extension)
+
+
 class FileType(object):
 
     def __init__(self):
@@ -217,14 +223,18 @@ class Snapshot(Thread):
                 # send image data for processing
                 self.face_detector_socket.send_pyobj((
                     None,
+                    camera_profile['storage'],
                     unix_timestamp,
                     publisher_data
                 ))
                 # publish event data
                 self.publisher.send_pyobj(publisher_data)
                 # create output file path
-                output_filename = os.path.join(camera_profile['storage'],
-                                               'fetch_' + str(unix_timestamp) + '.' + self.default_image_format)
+                output_filename = create_snapshot_path(
+                    parent_path=camera_profile['storage'],
+                    operation='fetch',
+                    unix_timestamp=unix_timestamp,
+                    file_extension=self.default_image_format)
                 log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
                 # persist for Cloud
                 im.save(output_filename)
@@ -657,6 +667,8 @@ class UploadEventHandler(FileSystemEventHandler):
                                 if file_base_name.endswith('.jpg') and 'face' not in snapshot_path:
                                     self.face_detector_socket.send_pyobj((
                                         snapshot_path,
+                                        # no parent path, extracted from snapshot_path
+                                        None,
                                         device_event.timestamp,
                                         # no image data
                                         None
@@ -696,7 +708,7 @@ class FaceDetector(Thread):
         while True:
             active_device = None
             try:
-                (snapshot_path, snapshot_timestamp, publisher_data) = self.socket.recv_pyobj()
+                (snapshot_path, parent_path, snapshot_timestamp, publisher_data) = self.socket.recv_pyobj()
                 if snapshot_path is not None:
                     wait_for_file_content(snapshot_path)
                     (parent_path, snapshot_file) = os.path.split(snapshot_path)
@@ -728,18 +740,20 @@ class FaceDetector(Thread):
                     # extract sub-image data aligned to face
                     face_image = image[top:bottom, left:right]
                     pil_image = Image.fromarray(face_image)
-                    if snapshot_path is not None:
-                        face_snapshot_path = os.path.join(
-                            parent_path,
-                            "{}_face_{}.{}".format(snapshot_file_base, face_num, snapshot_file_ext))
-                        log.info("Saving face #{} to {}".format(face_num, face_snapshot_path))
-                        # stash the image
-                        pil_image.save(face_snapshot_path)
-                    elif active_device is not None:
+                    if active_device is not None:
                         image_output = BytesIO()
                         pil_image.save(image_output, format='JPEG')
                         active_device['image'] = image_output.getvalue()
                         self.publisher.send_pyobj(publisher_data)
+                    # save the additional image data
+                    face_snapshot_path = create_snapshot_path(
+                        parent_path=parent_path,
+                        operation="face_{}".format(face_num),
+                        unix_timestamp=snapshot_timestamp,
+                        file_extension='jpg')
+                    log.info("Saving face #{} to {}".format(face_num, face_snapshot_path))
+                    pil_image.save(face_snapshot_path)
+                    # next face
                     face_num += 1
             except ContextTerminated:
                 self.socket.close()
