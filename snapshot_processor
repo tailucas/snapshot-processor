@@ -704,17 +704,18 @@ class FaceDetector(Thread):
                     # process file data
                     log.info("Loading image data from {}".format(snapshot_file))
                     image = load_image_file(snapshot_path)
+                    log.info("Finding faces in image file {}".format(snapshot_path))
                 elif publisher_data is not None:
                     active_device = publisher_data['active_devices'][0]
                     log.info("Loading image data from {} event.".format(active_device['device_label']))
                     pil_image = Image.open(BytesIO(active_device['image']))
+                    log.info("Finding faces in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
                     image = np.array(pil_image)
                 else:
                     raise ValueError("No viable image data to use.")
-                log.info("Finding faces in image {} {} {}...".format(image.format, image.size, image.mode))
                 # find faces using the specified model
                 faces = face_locations(image, number_of_times_to_upsample=0, model="cnn")
-                log.info("{} faces detected in {}".format(len(faces), snapshot_file))
+                log.info("{} faces detected {}".format(len(faces)))
                 face_num = 1
                 for face_location in faces:
                     top, right, bottom, left = face_location
