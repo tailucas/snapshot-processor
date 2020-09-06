@@ -750,7 +750,7 @@ class FaceDetector(Thread):
                     # save the additional image data
                     face_snapshot_path = create_snapshot_path(
                         parent_path=parent_path,
-                        operation="face_{}".format(face_num),
+                        operation="face{}".format(face_num),
                         unix_timestamp=snapshot_timestamp,
                         file_extension='jpg')
                     log.info("Saving face #{} to {}".format(face_num, face_snapshot_path))
