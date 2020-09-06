@@ -680,7 +680,7 @@ class UploadEventHandler(FileSystemEventHandler):
 
 class FaceDetector(Thread):
 
-    def __init__(self, gauth_creds_file, gdrive_folder):
+    def __init__(self):
         super(FaceDetector, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
