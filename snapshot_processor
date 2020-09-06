@@ -737,7 +737,7 @@ class FaceDetector(Thread):
                         pil_image.save(face_snapshot_path)
                     elif active_device is not None:
                         image_output = BytesIO()
-                        pil_image.save(image_output)
+                        pil_image.save(image_output, format='JPEG')
                         active_device['image'] = image_output.getvalue()
                         self.publisher.send_pyobj(publisher_data)
                     face_num += 1
