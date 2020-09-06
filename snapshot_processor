@@ -8,6 +8,7 @@ import builtins
 import copy
 import face_recognition
 import netifaces
+import numpy as np
 import os
 import pytz
 import requests
@@ -706,8 +707,8 @@ class FaceDetector(Thread):
                 elif publisher_data is not None:
                     active_device = publisher_data['active_devices'][0]
                     log.info("Loading image data from {} event.".format(active_device['device_label']))
-                    image_data = active_device['image']
-                    image = Image.open(BytesIO(image_data))
+                    pil_image = Image.open(BytesIO(active_device['image']))
+                    image = np.array(pil_image)
                 else:
                     raise ValueError("No viable image data to use.")
                 log.info("Finding faces in image {} {} {}...".format(image.format, image.size, image.mode))
