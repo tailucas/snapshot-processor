@@ -94,6 +94,30 @@ URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 
 HEARTBEAT_INTERVAL_SECONDS = 5
 
+
+def wait_for_file_content(file_path):
+    # FIXME: small delay to ensure that file is complete and
+    # closed before attempting upload
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        sleep_delay = 5
+        max_tries = 24
+        for tries in range(1, max_tries):
+            # no content
+            if os.path.getsize(file_path) > 0:
+                break
+            # less than 5 minutes old
+            if time.time() - os.path.getmtime(file_path) > 300:
+                break
+            log.warning('Waiting for {}s (try {} of {}) on empty file {}'.format(
+                sleep_delay,
+                tries,
+                max_tries,
+                file_path))
+            sleep(sleep_delay)
+            if tries >= max_tries:
+                break
+
+
 class FileType(object):
 
     def __init__(self):
@@ -132,9 +156,11 @@ class Snapshot(Thread):
         self.socket.bind(URL_WORKER_APP)
 
         self.publisher = zmq_context.socket(zmq.PUSH)
-        self.publisher.connect(URL_WORKER_PUBLISHER)
+        self.face_detector_socket = zmq_context.socket(zmq.PUSH)
 
     def run(self):
+        self.publisher.connect(URL_WORKER_PUBLISHER)
+        self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         while True:
             try:
                 output_trigger = self.socket.recv_pyobj()
@@ -175,9 +201,8 @@ class Snapshot(Thread):
                             break
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
-                output_filename = os.path.join(camera_profile['storage'],
-                                               'fetch_' + str(unix_timestamp) + '.' + self.default_image_format)
-                self.publisher.send_pyobj({
+                # publisher data
+                publisher_data = {
                     'active_devices': [
                         {
                             'device_key': device_key,
@@ -187,13 +212,25 @@ class Snapshot(Thread):
                         }
                     ],
                     'storage_url': self.cloud_storage_url
-                })
+                }
+                # send image data for processing
+                self.face_detector_socket.send_pyobj((
+                    None,
+                    unix_timestamp,
+                    publisher_data
+                ))
+                # publish event data
+                self.publisher.send_pyobj(publisher_data)
+                # create output file path
+                output_filename = os.path.join(camera_profile['storage'],
+                                               'fetch_' + str(unix_timestamp) + '.' + self.default_image_format)
                 log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
                 # persist for Cloud
                 im.save(output_filename)
             except ContextTerminated:
                 self.socket.close()
                 self.publisher.close()
+                self.face_detector_socket.close()
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
@@ -466,25 +503,9 @@ class GoogleDriveUploader(GoogleDriveManager):
         while True:
             try:
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
-                if os.path.exists(snapshot_path) and os.path.isfile(snapshot_path):
-                    # FIXME: small delay to ensure that file is complete and
-                    # closed before attempting upload
-                    sleep_delay = 10
-                    max_tries = 12
-                    for tries in range(1, max_tries):
-                        if os.path.getsize(snapshot_path) > 0:
-                            break
-                        if time.time() - os.path.getmtime(snapshot_path) > 300:
-                            break
-                        log.warning('Waiting for {}s (try {} of {}) on empty file {}'.format(
-                            sleep_delay,
-                            tries,
-                            max_tries,
-                            snapshot_path))
-                        sleep(sleep_delay)
-                        if tries >= 3:
-                            break
-                    self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
+                #FIXME: remove
+                wait_for_file_content(snapshot_path)
+                self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
             except ContextTerminated:
                 self.socket.close()
                 break
@@ -554,6 +575,9 @@ class UploadEventHandler(FileSystemEventHandler):
 
         self.cloud_storage_socket = zmq_context.socket(zmq.PUSH)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
+
+        self.face_detector_socket = zmq_context.socket(zmq.PUSH)
+        self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
 
         self.publisher = zmq_context.socket(zmq.PUSH)
         self.publisher.connect(URL_WORKER_PUBLISHER)
@@ -628,6 +652,14 @@ class UploadEventHandler(FileSystemEventHandler):
                                     'active_devices': [device_event.dict],
                                     'storage_url': self._cloud_storage_url
                                 })
+                                # start processing the image data
+                                if file_base_name.endswith('.jpg') and 'face' not in snapshot_path:
+                                    self.face_detector_socket.send_pyobj((
+                                        snapshot_path,
+                                        device_event.timestamp,
+                                        # no image data
+                                        None
+                                    ))
                             # upload the image snapshot to Cloud
                             self.cloud_storage_socket.send_pyobj((
                                 snapshot_path,
@@ -635,6 +667,7 @@ class UploadEventHandler(FileSystemEventHandler):
                             ))
                         except ContextTerminated:
                             self.publisher.close()
+                            self.face_detector_socket.close()
                             self.cloud_storage_socket.close()
                             return
                     else:
@@ -643,6 +676,84 @@ class UploadEventHandler(FileSystemEventHandler):
                     log.exception('Cannot process {}'.format(snapshot_path))
                     capture_exception()
                     sleep(1)
+
+
+class FaceDetector(Thread):
+
+    def __init__(self, gauth_creds_file, gdrive_folder):
+        super(FaceDetector, self).__init__()
+        self.name = self.__class__.__name__
+        self.daemon = True
+
+        self.socket = zmq_context.socket(zmq.PULL)
+        self.socket.bind(URL_WORKER_FACE_DETECTOR)
+
+        self.publisher = zmq_context.socket(zmq.PUSH)
+
+    def run(self):
+        self.publisher.connect(URL_WORKER_PUBLISHER)
+        while True:
+            active_device = None
+            try:
+                (snapshot_path, snapshot_timestamp, publisher_data) = self.socket.recv_pyobj()
+                if snapshot_path is not None:
+                    wait_for_file_content(snapshot_path)
+                    (parent_path, snapshot_file) = os.path.split(snapshot_path)
+                    (snapshot_file_base, snapshot_file_ext) = os.path.splitext(snapshot_file)
+                    # process file data
+                    log.info("Loading image data from {}".format(snapshot_file))
+                    image = load_image_file(snapshot_path)
+                    log.info("Finding faces in {}".format(snapshot_file))
+                elif publisher_data is not None:
+                    active_device = publisher_data['active_devices'][0]
+                    device_description = "{} {} {}".format(
+                        active_device['device_key'],
+                        active_device['device_label'],
+                        active_device['type']
+                    )
+                    log.info("Loading image data from {} event.".format(device_description))
+                    image_data = active_device['image']
+                    image = Image.open(BytesIO(image_data))
+                    log.info("Finding faces in {} event".format(device_description))
+                else:
+                    raise ValueError("No viable image data to use.")
+                # find faces using the specified model
+                faces = face_locations(image, number_of_times_to_upsample=0, model="cnn")
+                log.info("{} faces detected in {}".format(len(faces), snapshot_file))
+                face_num = 1
+                for face_location in faces:
+                    top, right, bottom, left = face_location
+                    log.info("Extracting face #{} at Top: {}, Left: {}, Bottom: {}, Right: {}".format(
+                        face_num,
+                        top,
+                        left,
+                        bottom,
+                        right))
+                    # extract sub-image data aligned to face
+                    face_image = image[top:bottom, left:right]
+                    pil_image = Image.fromarray(face_image)
+                    if snapshot_path is not None:
+                        face_snapshot_path = os.path.join(
+                            parent_path,
+                            "{}_face_{}.{}".format(snapshot_file_base, face_num, snapshot_file_ext))
+                        log.info("Saving face #{} to {}".format(face_num, face_snapshot_path))
+                        # stash the image
+                        pil_image.save(face_snapshot_path)
+                    elif active_device is not None:
+                        image_output = BytesIO()
+                        pil_image.save(image_output)
+                        active_device['image'] = image_output.getvalue()
+                        self.publisher.send_pyobj(publisher_data)
+                    face_num += 1
+            except ContextTerminated:
+                self.socket.close()
+                self.publisher.close()
+                break
+            except Exception:
+                log.exception(self.__class__.__name__)
+                capture_exception()
+                sleep(1)
+                continue
 
 
 if __name__ == "__main__":
@@ -720,9 +831,10 @@ if __name__ == "__main__":
         zmq_ipc_url=URL_WORKER_PUBLISHER,
         pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
         pub_port=APP_CONFIG.get('zmq', 'pubsub_port'))
-
     publisher.start()
     threads.threads_tracked.add(publisher.getName())
+    # face detection
+    face_detector = FaceDetector()
     # top-level types
     filetype = FileType()
     # ensure that auth is properly set up first
@@ -767,6 +879,9 @@ if __name__ == "__main__":
         # startup completed
         # back to INFO logging
         log.setLevel(logging.INFO)
+        # start face detector
+        face_detector.start()
+        threads.threads_tracked.add(face_detector.getName())
         # start Google Drive uploader
         google_drive_uploader.start()
         threads.threads_tracked.add(google_drive_uploader.getName())
