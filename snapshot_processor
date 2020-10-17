@@ -418,7 +418,7 @@ class GoogleDriveArchiver(GoogleDriveManager):
         self._gdrive_folder_url = gdrive_folder_url
 
     def run(self):
-        while True:
+        while not threads.shutting_down:
             log.debug('Finding files in {} ({}) to archive.'.format(self._gdrive_folder, self._gdrive_folder_id))
             try:
                 file_list = self._archive_drive.ListFile({
@@ -444,7 +444,7 @@ class GoogleDriveArchiver(GoogleDriveManager):
             # prevent memory leaks
             self._folder_id_cache.clear()
             # sleep until tomorrow
-            sleep(60*60*24)
+            threads.interruptable_sleep.wait(60*60*24)
 
     def archive(self, gdrive, gdrive_file, root_folder_id):
         filename = gdrive_file['title']
