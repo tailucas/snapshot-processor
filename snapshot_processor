@@ -606,6 +606,7 @@ class UploadEventHandler(FileSystemEventHandler):
     def close(self):
         self.cloud_storage_socket.close()
         self.publisher.close()
+        self.face_detector_socket.close()
 
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
