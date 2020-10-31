@@ -171,17 +171,22 @@ class Snapshot(Thread):
         while True:
             try:
                 output_trigger = self.socket.recv_pyobj()
-                timestamp = output_trigger['timestamp']
-                device_key = output_trigger['device_key']
-                device_label = output_trigger['device_label']
+                # FIXME: remove block
+                if isinstance(output_trigger, dict):
+                    timestamp = output_trigger['timestamp']
+                    device_key = output_trigger['device_key']
+                    device_label = output_trigger['device_label']
+                    if 'device_params' in output_trigger:
+                        camera_command = output_trigger['device_params']
+                else:
+                    timestamp = make_timestamp()
+                    device_key, device_label = output_trigger
                 if device_key not in self.cameras:
                     log.error("Camera configuration missing for '{}.'".format(device_label))
                     post_count_metric('Errors')
                     continue
                 camera_profile = self.cameras[device_key]
                 camera_command = self.default_command
-                if 'device_params' in output_trigger:
-                    camera_command = output_trigger['device_params']
                 # unclear whether cam supports requests auth header
                 camera_auth_user, camera_auth_password = camera_profile['auth'].split(':')
                 image_data = None
