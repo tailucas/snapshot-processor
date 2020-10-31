@@ -31,6 +31,7 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     lsof \
     make \
     mediainfo \
+    network-manager \
     openssh-server \
     patch \
     python3-certifi \
@@ -74,7 +75,8 @@ RUN systemctl mask \
     systemd-remount-fs.service \
     getty.target \
     graphical.target \
-    kmod-static-nodes.service
+    kmod-static-nodes.service \
+    NetworkManager.service
 
 STOPSIGNAL 37
 # ftp, ssh, zmq
