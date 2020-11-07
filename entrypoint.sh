@@ -30,7 +30,7 @@ fi
 if [ ! -f /data/snapshot_processor_creds ]; then
   set +u # work around venv stupidity
   . /opt/app/bin/activate
-  aws s3 cp s3://tailucas/home-automation/snapshot_processor_creds /data/snapshot_processor_creds
+  aws s3 cp s3://tailucas-automation/snapshot_processor_creds /data/snapshot_processor_creds
   deactivate
   set -u
 fi
