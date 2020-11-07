@@ -6,6 +6,7 @@ import logging.handlers
 import boto3
 import builtins
 import copy
+# pylint: disable=import-error
 import face_recognition
 import netifaces
 import numpy as np
@@ -87,7 +88,14 @@ from pylib.aws.swf import SWFActivityWaiter, \
 from pylib.process import SignalHandler, exec_cmd
 from pylib import threads
 from pylib.threads import thread_nanny
-from pylib.zmq import Publisher, URL_WORKER_PUBLISHER, DeviceActivator
+from pylib.zmq import Publisher, URL_WORKER_PUBLISHER
+
+# expose builtins for lint-friendly
+log = builtins.log
+APP_CONFIG = builtins.APP_CONFIG
+zmq_context = builtins.zmq_context
+APP_NAME = builtins.APP_NAME
+DEVICE_NAME = builtins.DEVICE_NAME
 
 
 URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
@@ -158,12 +166,11 @@ class Snapshot(Thread):
         self.default_image_format = APP_CONFIG.get('camera', 'default_image_format')
 
         self.cloud_storage_url = cloud_storage_url
+        self.socket = zmq_context.socket(zmq.PULL) # pylint: disable=no-member
+        self.socket.bind(URL_WORKER_APP) # pylint: disable=undefined-variable
 
-        self.socket = zmq_context.socket(zmq.PULL)
-        self.socket.bind(URL_WORKER_APP)
-
-        self.publisher = zmq_context.socket(zmq.PUSH)
-        self.face_detector_socket = zmq_context.socket(zmq.PUSH)
+        self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
 
     def run(self):
         self.publisher.connect(URL_WORKER_PUBLISHER)
@@ -289,7 +296,7 @@ class DeviceEvent(object):
 
     @property
     def timestamp_string(self):
-        return self.timestamp.strftime(ISO_DATE_FORMAT)
+        return self.timestamp.strftime(ISO_DATE_FORMAT) # pylint: disable=undefined-variable
 
     @property
     def event_detail(self):
@@ -464,11 +471,11 @@ class GoogleDriveArchiver(GoogleDriveManager):
             else:
                 # create the required folder structure
                 year_folder_name = created_date.strftime('%Y')
-                year_folder_id, url = self._get_gdrive_folder_id(gdrive, year_folder_name, root_folder_id)
+                year_folder_id, _ = self._get_gdrive_folder_id(gdrive, year_folder_name, root_folder_id)
                 month_folder_name = created_date.strftime('%m')
-                month_folder_id, url = self._get_gdrive_folder_id(gdrive, month_folder_name, year_folder_id)
+                month_folder_id, _ = self._get_gdrive_folder_id(gdrive, month_folder_name, year_folder_id)
                 day_folder_name = created_date.strftime('%d')
-                day_folder_id, url = self._get_gdrive_folder_id(gdrive, day_folder_name, month_folder_id)
+                day_folder_id, _ = self._get_gdrive_folder_id(gdrive, day_folder_name, month_folder_id)
                 self._folder_id_cache[ymd_date] = day_folder_id
                 gdrive_folder_id = day_folder_id
             log.debug('{} => folder key {} => folder ID {}'.format(filename, ymd_date, gdrive_folder_id))
@@ -509,7 +516,7 @@ class GoogleDriveUploader(GoogleDriveManager):
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.socket = zmq_context.socket(zmq.PULL)
+        self.socket = zmq_context.socket(zmq.PULL) # pylint: disable=no-member
         self.socket.bind(URL_WORKER_CLOUD_STORAGE)
 
         # determine the Drive folder details synchronously
@@ -589,13 +596,13 @@ class UploadEventHandler(FileSystemEventHandler):
 
         fs_observer.schedule(self, self._snapshot_root, recursive=True)
 
-        self.cloud_storage_socket = zmq_context.socket(zmq.PUSH)
+        self.cloud_storage_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
-        self.face_detector_socket = zmq_context.socket(zmq.PUSH)
+        self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
         self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
 
-        self.publisher = zmq_context.socket(zmq.PUSH)
+        self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
         self.publisher.connect(URL_WORKER_PUBLISHER)
 
         self._cloud_storage_url = None
@@ -704,10 +711,10 @@ class FaceDetector(Thread):
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.socket = zmq_context.socket(zmq.PULL)
+        self.socket = zmq_context.socket(zmq.PULL) # pylint: disable=no-member
         self.socket.bind(URL_WORKER_FACE_DETECTOR)
 
-        self.publisher = zmq_context.socket(zmq.PUSH)
+        self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
 
     def run(self):
         self.publisher.connect(URL_WORKER_PUBLISHER)
@@ -718,7 +725,6 @@ class FaceDetector(Thread):
                 if snapshot_path is not None:
                     wait_for_file_content(snapshot_path)
                     (parent_path, snapshot_file) = os.path.split(snapshot_path)
-                    (snapshot_file_base, snapshot_file_ext) = os.path.splitext(snapshot_file)
                     # process file data
                     log.info("Loading image data from {}".format(snapshot_file))
                     image = load_image_file(snapshot_path)
@@ -776,7 +782,7 @@ class FaceDetector(Thread):
 
 if __name__ == "__main__":
     # connect to SWF
-    swf_activity = SnapshotActivity(URL_WORKER_APP)
+    swf_activity = SnapshotActivity(URL_WORKER_APP) # pylint: disable=undefined-variable
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
                                             swf_region,
                                             swf_domain,
@@ -877,21 +883,13 @@ if __name__ == "__main__":
     # start the collectors
     observer.start()
     threads.threads_tracked.add(observer.getName())
-    # finish with the device activator
-    device_activator = DeviceActivator(
-        zmq_context=zmq_context,
-        zmq_ipc_url=URL_WORKER_APP,
-        pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
-        pub_port=APP_CONFIG.get('zmq', 'pushpull_port'))
-    device_activator.start()
-    threads.threads_tracked.add(device_activator.getName())
     # must be main thread
     signal_handler = SignalHandler()
     # start the nanny
     f = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
     f.setDaemon(True)
     f.start()
-    publisher_socket = zmq_context.socket(zmq.PUSH)
+    publisher_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
     publisher_socket.connect(URL_WORKER_PUBLISHER)
     try:
         # startup completed
