@@ -170,11 +170,14 @@ class Snapshot(Thread):
         self.socket.bind(URL_WORKER_APP) # pylint: disable=undefined-variable
 
         self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
-        self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.face_detector_socket = None
+        if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
+            self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
 
     def run(self):
         self.publisher.connect(URL_WORKER_PUBLISHER)
-        self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
+        if self.face_detector_socket:
+            self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         while True:
             try:
                 output_trigger = self.socket.recv_pyobj()
@@ -232,13 +235,14 @@ class Snapshot(Thread):
                     ],
                     'storage_url': self.cloud_storage_url
                 }
-                # send image data for processing
-                self.face_detector_socket.send_pyobj((
-                    None,
-                    camera_profile['storage'],
-                    unix_timestamp,
-                    publisher_data
-                ))
+                if self.face_detector_socket:
+                    # send image data for processing
+                    self.face_detector_socket.send_pyobj((
+                        None,
+                        camera_profile['storage'],
+                        unix_timestamp,
+                        publisher_data
+                    ))
                 # publish event data
                 self.publisher.send_pyobj(publisher_data)
                 # create output file path
@@ -253,7 +257,8 @@ class Snapshot(Thread):
             except ContextTerminated:
                 self.socket.close()
                 self.publisher.close()
-                self.face_detector_socket.close()
+                if self.face_detector_socket:
+                    self.face_detector_socket.close()
                 break
             except Exception:
                 log.exception(self.__class__.__name__)
@@ -599,8 +604,10 @@ class UploadEventHandler(FileSystemEventHandler):
         self.cloud_storage_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
-        self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
-        self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
+        self.face_detector_socket = None
+        if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
+            self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+            self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
 
         self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
         self.publisher.connect(URL_WORKER_PUBLISHER)
@@ -618,7 +625,8 @@ class UploadEventHandler(FileSystemEventHandler):
     def close(self):
         self.cloud_storage_socket.close()
         self.publisher.close()
-        self.face_detector_socket.close()
+        if self.face_detector_socket:
+            self.face_detector_socket.close()
 
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
@@ -676,16 +684,17 @@ class UploadEventHandler(FileSystemEventHandler):
                                     'active_devices': [device_event.dict],
                                     'storage_url': self._cloud_storage_url
                                 })
-                                # start processing the image data
-                                if file_base_name.endswith('.jpg') and 'face' not in snapshot_path:
-                                    self.face_detector_socket.send_pyobj((
-                                        snapshot_path,
-                                        # no parent path, extracted from snapshot_path
-                                        None,
-                                        device_event.timestamp,
-                                        # no image data
-                                        None
-                                    ))
+                                if self.face_detector_socket:
+                                    # start processing the image data
+                                    if file_base_name.endswith('.jpg') and 'face' not in snapshot_path:
+                                        self.face_detector_socket.send_pyobj((
+                                            snapshot_path,
+                                            # no parent path, extracted from snapshot_path
+                                            None,
+                                            device_event.timestamp,
+                                            # no image data
+                                            None
+                                        ))
                             # upload the image snapshot to Cloud
                             self.cloud_storage_socket.send_pyobj((
                                 snapshot_path,
@@ -693,8 +702,9 @@ class UploadEventHandler(FileSystemEventHandler):
                             ))
                         except ContextTerminated:
                             self.publisher.close()
-                            self.face_detector_socket.close()
                             self.cloud_storage_socket.close()
+                            if self.face_detector_socket:
+                                self.face_detector_socket.close()
                             return
                     else:
                         log.warning("Ignored unmapped path event: {}".format(snapshot_path))
@@ -858,7 +868,10 @@ if __name__ == "__main__":
     publisher.start()
     threads.threads_tracked.add(publisher.getName())
     # face detection
-    face_detector = FaceDetector()
+    if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
+        face_detector = FaceDetector()
+    else:
+        face_detector = None
     # top-level types
     filetype = FileType()
     # ensure that auth is properly set up first
@@ -895,9 +908,9 @@ if __name__ == "__main__":
         # startup completed
         # back to INFO logging
         log.setLevel(logging.INFO)
-        # start face detector
-        face_detector.start()
-        threads.threads_tracked.add(face_detector.getName())
+        if face_detector:
+            face_detector.start()
+            threads.threads_tracked.add(face_detector.getName())
         # start Google Drive uploader
         google_drive_uploader.start()
         threads.threads_tracked.add(google_drive_uploader.getName())
