@@ -1,4 +1,4 @@
-FROM balenalib/raspberrypi3-debian:buster-run
+FROM resinplayground/jetson-nano-cuda-cudnn-opencv:v0.2-full
 ENV INITSYSTEM on
 ENV container docker
 
@@ -21,7 +21,6 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     htop \
     libatlas-base-dev \
     libffi-dev \
-    libraspberrypi-bin \
     libjpeg-dev \
     liblapack-dev \
     libopenblas-dev \

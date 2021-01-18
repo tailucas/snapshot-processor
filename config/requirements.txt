@@ -6,9 +6,7 @@ botoflow
 face_recognition
 netifaces
 numpy
-opencv-python
 pathtools
-picamera
 python-dateutil
 python-magic
 pytz
@@ -18,4 +16,3 @@ sentry-sdk
 simplejson
 u-msgpack-python
 watchdog
-watson-developer-cloud
