@@ -875,15 +875,17 @@ if __name__ == "__main__":
     # top-level types
     filetype = FileType()
     # ensure that auth is properly set up first
+    google_drive_archiver = None
     try:
         google_drive_uploader = GoogleDriveUploader(
             gauth_creds_file=APP_CONFIG.get('gdrive', 'creds_file'),
             gdrive_folder=APP_CONFIG.get('gdrive', 'folder'))
-        google_drive_archiver = GoogleDriveArchiver(
-            gauth_creds_file=APP_CONFIG.get('gdrive', 'creds_file'),
-            gdrive_folder=APP_CONFIG.get('gdrive', 'folder'),
-            gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
-            gdrive_folder_url=google_drive_uploader.cloud_storage_url)
+        if APP_CONFIG.getboolean('gdrive', 'archiver_enabled'):
+            google_drive_archiver = GoogleDriveArchiver(
+                gauth_creds_file=APP_CONFIG.get('gdrive', 'creds_file'),
+                gdrive_folder=APP_CONFIG.get('gdrive', 'folder'),
+                gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
+                gdrive_folder_url=google_drive_uploader.cloud_storage_url)
     except Exception:
         log.fatal('Google Drive setup failure.', exc_info=1)
         exit(1)
@@ -915,8 +917,9 @@ if __name__ == "__main__":
         google_drive_uploader.start()
         threads.threads_tracked.add(google_drive_uploader.getName())
         # start the Google Driver archiver last
-        google_drive_archiver.start()
-        threads.threads_tracked.add(google_drive_archiver.getName())
+        if google_drive_archiver:
+            google_drive_archiver.start()
+            threads.threads_tracked.add(google_drive_archiver.getName())
         while not threads.shutting_down:
             publisher_socket.send_pyobj({
                 #TODO statistics

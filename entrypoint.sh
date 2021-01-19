@@ -79,6 +79,8 @@ chown -R "${APP_USER}:${APP_GROUP}" /data/
 # home
 mkdir -p "/home/${APP_USER}/.aws/"
 chown -R "${APP_USER}:${APP_GROUP}" "/home/${APP_USER}/"
+# access to nVidia hardware
+usermod -a -G video "${APP_USER}"
 # AWS configuration (no tee for secrets)
 cat /opt/app/config/aws-config | /opt/app/config_interpol > "/home/${APP_USER}/.aws/config"
 cat /opt/app/config/aws-credentials | /opt/app/config_interpol > "/home/${APP_USER}/.aws/credentials"
