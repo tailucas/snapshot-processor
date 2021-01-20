@@ -25,5 +25,6 @@ python -m pip install --upgrade setuptools
 # work around wheel stupidity
 python -m pip install --upgrade wheel
 
-python -m pip install -r "/opt/app/config/requirements.txt"
+python -m pip install -r "/opt/app/requirements.txt"
+
 deactivate
