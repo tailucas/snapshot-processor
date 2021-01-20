@@ -76,7 +76,9 @@ RUN systemctl mask \
     getty.target \
     graphical.target \
     kmod-static-nodes.service \
-    NetworkManager.service
+    NetworkManager.service \
+    # stop invocation of systemd-logind.service
+    unattended-upgrades.service
 
 STOPSIGNAL 37
 # ftp, ssh, zmq
