@@ -13,6 +13,7 @@ import numpy as np
 import os
 import pytz
 import requests
+import rtsp
 import sentry_sdk
 import signal
 import sys
@@ -788,6 +789,53 @@ class FaceDetector(Thread):
                 capture_exception()
                 sleep(1)
                 continue
+
+
+class FrameServer(Thread):
+
+    def __init__(self, camera_name, camera_auth, camera_address):
+        super(FrameServer, self).__init__()
+        self.name = self.__class__.__name__
+        self.daemon = True
+
+        self.detector = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.capture_duration_seconds = APP_CONFIG.get('camera', 'rtsp_capture_duration_seconds')
+        self.rtsp_url = 'rtsp://{}@{}/{}'.format(
+            camera_auth,
+            camera_address,
+            APP_CONFIG.get('camera', 'rtsp_path'))
+        self.camera_name = camera_name
+        self.camera_address = camera_address
+
+    def process_image(self, image):
+        pass
+
+    def run(self):
+        self.detector.connect(URL_WORKER_FACE_DETECTOR)
+        frame_count = 0
+        try:
+            with rtsp.Client(rtsp_server_uri=self.rtsp_url) as client:
+                image = client.read()
+                frame_count += 1
+                start_time = time.time()
+                while True:
+                    self.process_image(image)
+                    image = client.read(raw=True)
+                    frame_count += 1
+                    # stop
+                    if time.time() - start_time > self.capture_duration_seconds:
+                        break
+        except ContextTerminated:
+            self.detector.close()
+        except Exception:
+            log.exception(self.__class__.__name__)
+            capture_exception()
+            sleep(1)
+        log.info('Read {} frames from {}@{} in {}s.'.format(
+            frame_count,
+            self.camera_name,
+            self.camera_address,
+            self.capture_duration_seconds))
 
 
 if __name__ == "__main__":
