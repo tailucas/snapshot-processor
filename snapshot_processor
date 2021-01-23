@@ -247,10 +247,13 @@ class Snapshot(Thread):
                     if capture_thread and capture_thread.is_alive():
                         log.info('Not starting additional capture thread for {} which is still alive.'.format(device_key))
                     else:
+                        camera_ip, port = camera_profile['url'].split(':')
+                        port = APP_CONFIG.get('camera', 'rtsp_port')
+                        camera_address = ':'.join([camera_ip, port])
                         capture_thread = FrameServer(
                             camera_name=device_key,
                             camera_auth=camera_profile['auth'],
-                            camera_address=camera_profile['url'],
+                            camera_address=camera_address,
                             parent_path=camera_profile['storage'],
                             snapshot_timestamp=unix_timestamp,
                             publisher_data=publisher_data)
@@ -837,6 +840,8 @@ class FrameServer(Thread):
         self.publisher_data = publisher_data
 
     def process_image(self, pil_image):
+        if not pil_image:
+            return
         log.info("Finding faces in frame-grab {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
         active_device = self.publisher_data['active_devices'][0]
         active_device['pil_np_array'] = np.array(pil_image)
