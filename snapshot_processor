@@ -6,7 +6,7 @@ import logging.handlers
 import boto3
 import builtins
 import copy
-# pylint: disable=import-error
+import cv2
 import face_recognition
 import netifaces
 import numpy as np
@@ -857,29 +857,33 @@ class FrameServer(Thread):
         global frame_server_mutex
         self.detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         frame_count = 0
+        capture = None
         try:
-            log.info('Waiting for air time with {}...'.format(self.camera_address))
+            log.info('Waiting for air time with {}...'.format(self.camera_name))
             frame_server_mutex.acquire()
-            log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_address, self.rtsp_url, self.capture_duration_seconds))
-            with rtsp.Client(rtsp_server_uri=self.rtsp_url) as client:
-                pil_image = client.read()
+            log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_name, self.camera_address, self.capture_duration_seconds))
+            capture = cv2.VideoCapture(self.rtsp_url) # pylint: disable=no-member
+            start_time = time.time()
+            #TODO: adjust based on time for first frame
+            while time.time() - start_time <= self.capture_duration_seconds:
+                ret, frame = capture.read()
+                if not ret:
+                    #FIXME: adjust
+                    sleep(0.1)
+                    next
                 frame_count += 1
-                start_time = time.time()
-                while True:
-                    self.process_image(pil_image)
-                    #FIXME: take only one frame for test
-                    break
-                    pil_image = client.read(raw=False)
-                    frame_count += 1
-                    # stop
-                    if time.time() - start_time > self.capture_duration_seconds:
-                        break
+                pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) # pylint: disable=no-member
+                #FIXME: take only one frame for test
+                self.process_image(pil_image)
+                break
         except ContextTerminated:
             self.detector_socket.close()
         except Exception:
             log.exception(self.__class__.__name__)
             capture_exception()
         finally:
+            if capture:
+                capture.release()
             frame_server_mutex.release()
             self.detector_socket.close()
         log.info('Read {} frames from {}@{} in {}s.'.format(
