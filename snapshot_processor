@@ -174,6 +174,7 @@ class Snapshot(Thread):
         self.face_detector_socket = None
         if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
             self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.capture_threads = {}
 
     def run(self):
         self.publisher.connect(URL_WORKER_PUBLISHER)
@@ -201,6 +202,7 @@ class Snapshot(Thread):
                 # unclear whether cam supports requests auth header
                 camera_auth_user, camera_auth_password = camera_profile['auth'].split(':')
                 image_data = None
+                # grab a first frame for overall context
                 for tries in range(1, 4):
                     try:
                         r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_profile['url']), params={
@@ -222,6 +224,7 @@ class Snapshot(Thread):
                                 repr(e)))
                             post_count_metric('Errors')
                             break
+                # construct message to publish
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
                 # publisher data
@@ -236,7 +239,26 @@ class Snapshot(Thread):
                     ],
                     'storage_url': self.cloud_storage_url
                 }
-                if self.face_detector_socket:
+                # look for faces in a continuous stream
+                if APP_CONFIG.getboolean('camera', 'rtsp_capture_enabled'):
+                    capture_thread = None
+                    if device_key in self.capture_threads:
+                        capture_thread = self.capture_threads[device_key]
+                    if capture_thread and capture_thread.is_alive():
+                        log.info('Not starting additional capture thread for {} which is still alive.'.format(device_key))
+                    else:
+                        capture_thread = FrameServer(
+                            camera_name=device_key,
+                            camera_auth=camera_profile['auth'],
+                            camera_address=camera_profile['url'],
+                            parent_path=camera_profile['storage'],
+                            snapshot_timestamp=unix_timestamp,
+                            publisher_data=publisher_data)
+                        # replace the existing thread
+                        self.capture_threads[device_key] = capture_thread
+                        # start the thread
+                        capture_thread.start()
+                elif self.face_detector_socket:
                     # send image data for processing
                     self.face_detector_socket.send_pyobj((
                         None,
@@ -743,9 +765,12 @@ class FaceDetector(Thread):
                 elif publisher_data is not None:
                     active_device = publisher_data['active_devices'][0]
                     log.info("Loading image data from {} event.".format(active_device['device_label']))
-                    pil_image = Image.open(BytesIO(active_device['image']))
-                    log.info("Finding faces in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
-                    image = np.array(pil_image)
+                    if 'pil_np_array' in active_device:
+                        image = active_device['pil_np_array']
+                    else:
+                        pil_image = Image.open(BytesIO(active_device['image']))
+                        log.info("Finding faces in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
+                        image = np.array(pil_image)
                 else:
                     raise ValueError("No viable image data to use.")
                 # find faces using the specified model
@@ -793,12 +818,12 @@ class FaceDetector(Thread):
 
 class FrameServer(Thread):
 
-    def __init__(self, camera_name, camera_auth, camera_address):
+    def __init__(self, camera_name, camera_auth, camera_address, parent_path, snapshot_timestamp, publisher_data):
         super(FrameServer, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.detector = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
         self.capture_duration_seconds = APP_CONFIG.get('camera', 'rtsp_capture_duration_seconds')
         self.rtsp_url = 'rtsp://{}@{}/{}'.format(
             camera_auth,
@@ -806,31 +831,43 @@ class FrameServer(Thread):
             APP_CONFIG.get('camera', 'rtsp_path'))
         self.camera_name = camera_name
         self.camera_address = camera_address
+        # to send to face detector
+        self.parent_path = parent_path
+        self.snapshot_timestamp = snapshot_timestamp
+        self.publisher_data = publisher_data
 
-    def process_image(self, image):
-        pass
+    def process_image(self, pil_image):
+        active_device = self.publisher_data['active_devices'][0]
+        active_device['pil_np_array'] = np.array(pil_image)
+        self.detector_socket.send_pyobj((
+            None,
+            self.parent_path,
+            self.snapshot_timestamp,
+            self.publisher_data
+        ))
 
     def run(self):
-        self.detector.connect(URL_WORKER_FACE_DETECTOR)
+        self.detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         frame_count = 0
         try:
             with rtsp.Client(rtsp_server_uri=self.rtsp_url) as client:
-                image = client.read()
+                pil_image = client.read()
                 frame_count += 1
                 start_time = time.time()
                 while True:
-                    self.process_image(image)
-                    image = client.read(raw=True)
+                    self.process_image(pil_image)
+                    pil_image = client.read(raw=False)
                     frame_count += 1
                     # stop
                     if time.time() - start_time > self.capture_duration_seconds:
                         break
         except ContextTerminated:
-            self.detector.close()
+            self.detector_socket.close()
         except Exception:
             log.exception(self.__class__.__name__)
             capture_exception()
-            sleep(1)
+        finally:
+            self.detector_socket.close()
         log.info('Read {} frames from {}@{} in {}s.'.format(
             frame_count,
             self.camera_name,
