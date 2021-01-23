@@ -837,6 +837,7 @@ class FrameServer(Thread):
         self.publisher_data = publisher_data
 
     def process_image(self, pil_image):
+        log.info("Finding faces in frame-grab {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
         active_device = self.publisher_data['active_devices'][0]
         active_device['pil_np_array'] = np.array(pil_image)
         self.detector_socket.send_pyobj((
@@ -856,6 +857,8 @@ class FrameServer(Thread):
                 start_time = time.time()
                 while True:
                     self.process_image(pil_image)
+                    #FIXME: take only one frame for test
+                    break
                     pil_image = client.read(raw=False)
                     frame_count += 1
                     # stop
