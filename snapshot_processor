@@ -824,7 +824,7 @@ class FrameServer(Thread):
         self.daemon = True
 
         self.detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
-        self.capture_duration_seconds = APP_CONFIG.get('camera', 'rtsp_capture_duration_seconds')
+        self.capture_duration_seconds = APP_CONFIG.getint('camera', 'rtsp_capture_duration_seconds')
         self.rtsp_url = 'rtsp://{}@{}/{}'.format(
             camera_auth,
             camera_address,
