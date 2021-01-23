@@ -41,7 +41,7 @@ from requests.exceptions import RequestException
 from sentry_sdk import capture_exception
 from socket import error as socket_error
 from ssl import SSLEOFError
-from threading import Thread
+from threading import Thread, Lock
 from time import sleep
 from traceback import StackSummary
 from urllib.request import pathname2url
@@ -103,6 +103,8 @@ URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 
 HEARTBEAT_INTERVAL_SECONDS = 5
+
+frame_server_mutex = Lock()
 
 
 def wait_for_file_content(file_path):
@@ -852,9 +854,13 @@ class FrameServer(Thread):
         ))
 
     def run(self):
+        global frame_server_mutex
         self.detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         frame_count = 0
         try:
+            log.info('Waiting for air time with {}...'.format(self.camera_address))
+            frame_server_mutex.acquire()
+            log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_address, self.rtsp_url, self.capture_duration_seconds))
             with rtsp.Client(rtsp_server_uri=self.rtsp_url) as client:
                 pil_image = client.read()
                 frame_count += 1
@@ -874,6 +880,7 @@ class FrameServer(Thread):
             log.exception(self.__class__.__name__)
             capture_exception()
         finally:
+            frame_server_mutex.release()
             self.detector_socket.close()
         log.info('Read {} frames from {}@{} in {}s.'.format(
             frame_count,
