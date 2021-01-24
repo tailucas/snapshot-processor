@@ -801,6 +801,9 @@ class FaceDetector(Thread):
                         image_output = BytesIO()
                         pil_image.save(image_output, format='JPEG')
                         active_device['image'] = image_output.getvalue()
+                        # remove any numpy data
+                        if 'cv2_frame' in active_device:
+                            del active_device['cv2_frame']
                         self.publisher.send_pyobj(publisher_data)
                     # save the additional image data
                     face_snapshot_path = create_snapshot_path(
