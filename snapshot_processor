@@ -13,7 +13,6 @@ import numpy as np
 import os
 import pytz
 import requests
-import rtsp
 import sentry_sdk
 import signal
 import sys
@@ -861,21 +860,22 @@ class FrameServer(Thread):
         try:
             log.info('Waiting for air time with {}...'.format(self.camera_name))
             frame_server_mutex.acquire()
-            log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_name, self.camera_address, self.capture_duration_seconds))
+            log.info('Starting video capture from {}@{}...'.format(self.camera_name, self.camera_address))
             capture = cv2.VideoCapture(self.rtsp_url) # pylint: disable=no-member
+            log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_name, self.camera_address, self.capture_duration_seconds))
             start_time = time.time()
             #TODO: adjust based on time for first frame
-            while time.time() - start_time <= self.capture_duration_seconds:
+            while capture and capture.isOpened() and time.time() - start_time <= self.capture_duration_seconds:
                 ret, frame = capture.read()
                 if not ret:
-                    #FIXME: adjust
-                    sleep(0.1)
-                    next
+                    log.warn('No more frames from {}@{} after {} frames.'.format(self.camera_name, self.camera_address, frame_count))
+                    break
                 frame_count += 1
                 pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) # pylint: disable=no-member
-                #FIXME: take only one frame for test
                 self.process_image(pil_image)
-                break
+                #FIXME: take only a few frames for test
+                if frame_count >= 10:
+                    break
         except ContextTerminated:
             self.detector_socket.close()
         except Exception:
@@ -890,7 +890,7 @@ class FrameServer(Thread):
             frame_count,
             self.camera_name,
             self.camera_address,
-            self.capture_duration_seconds))
+            time.time() - start_time))
 
 
 if __name__ == "__main__":
