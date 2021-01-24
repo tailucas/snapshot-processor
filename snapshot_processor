@@ -768,8 +768,8 @@ class FaceDetector(Thread):
                 elif publisher_data is not None:
                     active_device = publisher_data['active_devices'][0]
                     log.debug("Loading image data from {} event.".format(active_device['device_label']))
-                    if 'pil_np_array' in active_device:
-                        image = active_device['pil_np_array']
+                    if 'cv2_frame' in active_device:
+                        image = active_device['cv2_frame']
                     else:
                         pil_image = Image.open(BytesIO(active_device['image']))
                         log.debug("Finding faces in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
@@ -842,23 +842,6 @@ class FrameServer(Thread):
         self.snapshot_timestamp = snapshot_timestamp
         self.publisher_data = publisher_data
 
-    def process_image(self, pil_image):
-        if not pil_image:
-            return
-        log.debug("Finding faces in frame-grab from {} (format={}, size={}, mode={})...".format(
-            self.camera_name,
-            pil_image.format,
-            pil_image.size,
-            pil_image.mode))
-        active_device = self.publisher_data['active_devices'][0]
-        active_device['pil_np_array'] = np.array(pil_image)
-        self.detector_socket.send_pyobj((
-            None,
-            self.parent_path,
-            self.snapshot_timestamp,
-            self.publisher_data
-        ))
-
     def run(self):
         global frame_server_mutex
         self.detector_socket.connect(URL_WORKER_FACE_DETECTOR)
@@ -881,8 +864,15 @@ class FrameServer(Thread):
                     sleep(0.01)
                     continue
                 frame_count += 1
-                pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) # pylint: disable=no-member
-                self.process_image(pil_image)
+                active_device = self.publisher_data['active_devices'][0]
+                active_device['cv2_frame'] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) # pylint: disable=no-member
+                self.detector_socket.send_pyobj((
+                    None,
+                    self.parent_path,
+                    self.snapshot_timestamp,
+                    self.publisher_data
+                ))
+                # do not consume faster than this rate
                 sleep(0.01)
                 #FIXME: take only a few frames for test
                 if frame_count >= 10:
