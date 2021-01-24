@@ -14,11 +14,13 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     cmake \
     cron \
     cpp \
+    curl \
     dbus \
     g++ \
     gcc \
     git \
     htop \
+    jq \
     libatlas-base-dev \
     libffi-dev \
     libraspberrypi-bin \

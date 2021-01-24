@@ -2,6 +2,12 @@
 set -eu
 set -o pipefail
 
+while [ -n "${STAY_DOWN:-}" ]; do
+  echo "${BALENA_DEVICE_NAME_AT_INIT} (${BALENA_DEVICE_ARCH} ${BALENA_DEVICE_TYPE}) is in StayDown (unset STAY_DOWN variable to start)."
+  curl -s -X GET --header "Content-Type:application/json" "${BALENA_SUPERVISOR_ADDRESS}/v1/device?apikey=${BALENA_SUPERVISOR_API_KEY}" | jq
+  sleep 3600
+done
+
 # Resin API key
 export RESIN_API_KEY="${RESIN_API_KEY:-$API_KEY_RESIN}"
 # root user access, prefer key
