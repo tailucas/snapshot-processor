@@ -762,17 +762,17 @@ class FaceDetector(Thread):
                     wait_for_file_content(snapshot_path)
                     (parent_path, snapshot_file) = os.path.split(snapshot_path)
                     # process file data
-                    log.info("Loading image data from {}".format(snapshot_file))
+                    log.debug("Loading image data from {}".format(snapshot_file))
                     image = load_image_file(snapshot_path)
-                    log.info("Finding faces in image file {}".format(snapshot_path))
+                    log.debug("Finding faces in image file {}".format(snapshot_path))
                 elif publisher_data is not None:
                     active_device = publisher_data['active_devices'][0]
-                    log.info("Loading image data from {} event.".format(active_device['device_label']))
+                    log.debug("Loading image data from {} event.".format(active_device['device_label']))
                     if 'pil_np_array' in active_device:
                         image = active_device['pil_np_array']
                     else:
                         pil_image = Image.open(BytesIO(active_device['image']))
-                        log.info("Finding faces in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
+                        log.debug("Finding faces in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
                         image = np.array(pil_image)
                 else:
                     raise ValueError("No viable image data to use.")
@@ -780,7 +780,10 @@ class FaceDetector(Thread):
                 # TODO: make non-CNN model optional for memory-constrained devices
                 #faces = face_locations(image)
                 faces = face_locations(image, number_of_times_to_upsample=0, model="cnn")
-                log.info("{} faces detected.".format(len(faces)))
+                if (len(faces) > 0):
+                    log.info("{} faces detected.".format(len(faces)))
+                else:
+                    log.debug("{} faces detected.".format(len(faces)))
                 face_num = 1
                 for face_location in faces:
                     top, right, bottom, left = face_location
@@ -842,7 +845,11 @@ class FrameServer(Thread):
     def process_image(self, pil_image):
         if not pil_image:
             return
-        log.info("Finding faces in frame-grab {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
+        log.debug("Finding faces in frame-grab from {} (format={}, size={}, mode={})...".format(
+            self.camera_name,
+            pil_image.format,
+            pil_image.size,
+            pil_image.mode))
         active_device = self.publisher_data['active_devices'][0]
         active_device['pil_np_array'] = np.array(pil_image)
         self.detector_socket.send_pyobj((
@@ -870,9 +877,13 @@ class FrameServer(Thread):
                 if not ret:
                     log.warn('No more frames from {}@{} after {} frames.'.format(self.camera_name, self.camera_address, frame_count))
                     break
+                if frame is None:
+                    sleep(0.01)
+                    continue
                 frame_count += 1
                 pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) # pylint: disable=no-member
                 self.process_image(pil_image)
+                sleep(0.01)
                 #FIXME: take only a few frames for test
                 if frame_count >= 10:
                     break
