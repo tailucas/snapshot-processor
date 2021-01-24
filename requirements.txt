@@ -13,7 +13,6 @@ python-magic
 pytz
 pyzmq
 requests
-rtsp
 sentry-sdk
 simplejson
 u-msgpack-python
