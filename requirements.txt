@@ -18,4 +18,3 @@ sentry-sdk
 simplejson
 u-msgpack-python
 watchdog
-watson-developer-cloud
