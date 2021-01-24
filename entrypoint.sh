@@ -81,6 +81,10 @@ mkdir -p "/home/${APP_USER}/.aws/"
 chown -R "${APP_USER}:${APP_GROUP}" "/home/${APP_USER}/"
 # access to nVidia hardware
 usermod -a -G video "${APP_USER}"
+# access to Jetson Nano fan PWM (0-255)
+if [ -e /sys/devices/pwm-fan/target_pwm ]; then
+  chown "${APP_USER}" /sys/devices/pwm-fan/target_pwm
+fi
 # AWS configuration (no tee for secrets)
 cat /opt/app/config/aws-config | /opt/app/config_interpol > "/home/${APP_USER}/.aws/config"
 cat /opt/app/config/aws-credentials | /opt/app/config_interpol > "/home/${APP_USER}/.aws/credentials"
