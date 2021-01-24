@@ -777,9 +777,10 @@ class FaceDetector(Thread):
                 else:
                     raise ValueError("No viable image data to use.")
                 # find faces using the specified model
-                # TODO: make non-CNN model optional for memory-constrained devices
-                #faces = face_locations(image)
-                faces = face_locations(image, number_of_times_to_upsample=0, model="cnn")
+                faces = face_locations(
+                    image,
+                    number_of_times_to_upsample=0,
+                    model=APP_CONFIG.get('snapshots', 'face_detection_model'))
                 if (len(faces) > 0):
                     log.info("{} faces detected.".format(len(faces)))
                 else:
