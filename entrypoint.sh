@@ -91,6 +91,10 @@ usermod -a -G video "${APP_USER}"
 if [ -e /sys/devices/pwm-fan/target_pwm ]; then
   chown "${APP_USER}" /sys/devices/pwm-fan/target_pwm
 fi
+# allow reading of fan RPM
+if [ -e /sys/devices/pwm-fan/tach_enable ]; then
+  echo "1" > /sys/devices/pwm-fan/tach_enable
+fi
 # AWS configuration (no tee for secrets)
 cat /opt/app/config/aws-config | /opt/app/config_interpol > "/home/${APP_USER}/.aws/config"
 cat /opt/app/config/aws-credentials | /opt/app/config_interpol > "/home/${APP_USER}/.aws/credentials"
@@ -221,6 +225,14 @@ if [ -z "${WIFI_USED:-}" ]; then
   nmcli radio
   nmcli radio wifi off
   nmcli radio
+fi
+
+# output some useful Jetson stats before hand-off
+if [ -e /sys/devices/pwm-fan/pwm_rpm_table ]; then
+  cat /sys/devices/pwm-fan/pwm_rpm_table
+fi
+if [ -e /sys/devices/57000000.gpu/devfreq/57000000.gpu/trans_stat ]; then
+  cat /sys/devices/57000000.gpu/devfreq/57000000.gpu/trans_stat
 fi
 
 # replace this entrypoint with systemd init scope
