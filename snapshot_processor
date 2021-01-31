@@ -97,9 +97,11 @@ zmq_context = builtins.zmq_context
 APP_NAME = builtins.APP_NAME
 DEVICE_NAME = builtins.DEVICE_NAME
 
-
 URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
+
+pwm_fan_control = None
+pwm_fan_mutex = Lock()
 
 HEARTBEAT_INTERVAL_SECONDS = 5
 
@@ -776,6 +778,9 @@ class FaceDetector(Thread):
                         image = np.array(pil_image)
                 else:
                     raise ValueError("No viable image data to use.")
+                # start some cooling
+                if pwm_fan_control:
+                    pwm_fan_control.start_fan()
                 # find faces using the specified model
                 faces = face_locations(
                     image,
@@ -898,7 +903,84 @@ class FrameServer(Thread):
             time.time() - start_time))
 
 
+class PwmFanControl(Thread):
+
+    def __init__(self, pwm_device_path_prefix, pwm_decrement_rate=1):
+        Thread.__init__(self)
+        self.name = '{}'.format(self.__class__.__name__)
+        self.daemon = True
+
+        self.rpm_measured_file = os.path.join(pwm_device_path_prefix, 'rpm_measured')
+        self.target_pwm = os.path.join(pwm_device_path_prefix, 'target_pwm')
+        self.pwm_decrement_rate = pwm_decrement_rate
+        self.pwm_cap = 255
+        pwm_cap_file = os.path.join(pwm_device_path_prefix, 'pwm_cap')
+        if os.path.exists(pwm_cap_file):
+            with open(pwm_cap_file) as f:
+                self.pwm_cap = int(f.read())
+
+    def _read(self, file_name):
+        with open(file_name) as f:
+            return int(f.read())
+
+    def _write(self, file_name, value):
+        global pwm_fan_mutex
+        try:
+            pwm_fan_mutex.acquire()
+            with open(file_name, 'w') as f:
+                f.write(str(value))
+        finally:
+            pwm_fan_mutex.release()
+
+    def start_fan(self):
+        self._write(self.target_pwm, self.pwm_cap)
+
+    def stop_fan(self):
+        self._write(self.target_pwm, 0)
+
+    def read_fan_state(self, detail=False):
+        pwm_value = self._read(self.target_pwm)
+        summary = None
+        if detail:
+            rpm_value = self._read(self.rpm_measured_file)
+            summary = 'Fan is {} RPM (PWM={})'.format(rpm_value, pwm_value)
+        return pwm_value, summary
+
+    # noinspection PyBroadException
+    def run(self):
+        pwm_value, summary = self.read_fan_state(detail=True)
+        log.info(summary)
+        while not threads.shutting_down:
+            try:
+                # read the fan value and only tick down if it is above 0
+                pwm_value, _ = self.read_fan_state()
+                if pwm_value > 0:
+                    # decrement at required reate
+                    pwm_value -= self.pwm_decrement_rate
+                    if pwm_value < 0:
+                        pwm_value = 0
+                    # write the new value
+                    self._write(self.target_pwm, pwm_value)
+                    # short sleep, and re-check
+                    sleep(1)
+                    continue
+                threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
+            except Exception:
+                log.exception(self.name)
+                capture_exception()
+                sleep(1)
+                continue
+        # stop the fan for shutdown
+        self.stop_fan()
+        pwm_value, summary = self.read_fan_state(detail=True)
+        log.info(summary)
+
+
 if __name__ == "__main__":
+    # set up fan control
+    pwm_device_path_prefix = '/sys/devices/pwm-fan'
+    if os.path.exists(os.path.join(pwm_device_path_prefix, 'target_pwm')):
+        pwm_fan_control = PwmFanControl(pwm_device_path_prefix)
     # connect to SWF
     swf_activity = SnapshotActivity(URL_WORKER_APP) # pylint: disable=undefined-variable
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
@@ -1018,6 +1100,8 @@ if __name__ == "__main__":
         # startup completed
         # back to INFO logging
         log.setLevel(logging.INFO)
+        if pwm_fan_control:
+            pwm_fan_control.start()
         if face_detector:
             face_detector.start()
             threads.threads_tracked.add(face_detector.getName())
