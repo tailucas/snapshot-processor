@@ -91,8 +91,9 @@ usermod -a -G video "${APP_USER}"
 if [ -e /sys/devices/pwm-fan/target_pwm ]; then
   chown "${APP_USER}" /sys/devices/pwm-fan/target_pwm
 fi
-# allow reading of fan RPM
-if [ -e /sys/devices/pwm-fan/tach_enable ]; then
+# allow reading of fan RPM, only set if unset
+TACH_ENABLE=$(cat /sys/devices/pwm-fan/tach_enable)
+if [ -e /sys/devices/pwm-fan/tach_enable ] && [ "$TACH_ENABLE" == "0" ]; then
   echo "1" > /sys/devices/pwm-fan/tach_enable
 fi
 # AWS configuration (no tee for secrets)
