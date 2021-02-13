@@ -79,7 +79,10 @@ RUN systemctl mask \
     kmod-static-nodes.service \
     NetworkManager.service \
     # stop invocation of systemd-logind.service
-    unattended-upgrades.service
+    unattended-upgrades.service \
+    # no daily upgrades
+    apt-daily.service \
+    apt-daily-upgrade.service
 
 STOPSIGNAL 37
 # ftp, ssh, zmq
