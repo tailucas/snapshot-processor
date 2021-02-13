@@ -860,6 +860,7 @@ class FrameServer(Thread):
             log.info('Waiting for air time with {}...'.format(self.camera_name))
             frame_server_mutex.acquire()
             log.info('Starting video capture from {}@{}...'.format(self.camera_name, self.camera_address))
+            #TODO: https://github.com/ageitgey/face_recognition/issues/659#issuecomment-468008178
             capture = cv2.VideoCapture(self.rtsp_url) # pylint: disable=no-member
             log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_name, self.camera_address, self.capture_duration_seconds))
             start_time = time.time()
