@@ -2,6 +2,12 @@
 set -eu
 set -o pipefail
 
+while [ -n "${STAY_DOWN:-}" ]; do
+  echo "${BALENA_DEVICE_NAME_AT_INIT} (${BALENA_DEVICE_ARCH} ${BALENA_DEVICE_TYPE}) is in StayDown (unset STAY_DOWN variable to start)."
+  curl -s -X GET --header "Content-Type:application/json" "${BALENA_SUPERVISOR_ADDRESS}/v1/device?apikey=${BALENA_SUPERVISOR_API_KEY}" | jq
+  sleep 3600
+done
+
 # Resin API key
 export RESIN_API_KEY="${RESIN_API_KEY:-$API_KEY_RESIN}"
 # root user access, prefer key
@@ -84,6 +90,10 @@ usermod -a -G video "${APP_USER}"
 # access to Jetson Nano fan PWM (0-255)
 if [ -e /sys/devices/pwm-fan/target_pwm ]; then
   chown "${APP_USER}" /sys/devices/pwm-fan/target_pwm
+fi
+# allow reading of fan RPM
+if [ -e /sys/devices/pwm-fan/tach_enable ]; then
+  echo "1" > /sys/devices/pwm-fan/tach_enable
 fi
 # AWS configuration (no tee for secrets)
 cat /opt/app/config/aws-config | /opt/app/config_interpol > "/home/${APP_USER}/.aws/config"
@@ -215,6 +225,14 @@ if [ -z "${WIFI_USED:-}" ]; then
   nmcli radio
   nmcli radio wifi off
   nmcli radio
+fi
+
+# output some useful Jetson stats before hand-off
+if [ -e /sys/devices/pwm-fan/pwm_rpm_table ]; then
+  cat /sys/devices/pwm-fan/pwm_rpm_table
+fi
+if [ -e /sys/devices/57000000.gpu/devfreq/57000000.gpu/trans_stat ]; then
+  cat /sys/devices/57000000.gpu/devfreq/57000000.gpu/trans_stat
 fi
 
 # replace this entrypoint with systemd init scope
