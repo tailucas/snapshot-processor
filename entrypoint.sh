@@ -92,9 +92,11 @@ if [ -e /sys/devices/pwm-fan/target_pwm ]; then
   chown "${APP_USER}" /sys/devices/pwm-fan/target_pwm
 fi
 # allow reading of fan RPM, only set if unset
-TACH_ENABLE=$(cat /sys/devices/pwm-fan/tach_enable)
-if [ -e /sys/devices/pwm-fan/tach_enable ] && [ "$TACH_ENABLE" == "0" ]; then
-  echo "1" > /sys/devices/pwm-fan/tach_enable
+if [ -e /sys/devices/pwm-fan/tach_enable ]; then
+  TACH_ENABLE=$(cat /sys/devices/pwm-fan/tach_enable)
+  if [ "$TACH_ENABLE" == "0" ]; then
+    echo "1" > /sys/devices/pwm-fan/tach_enable
+  fi
 fi
 # AWS configuration (no tee for secrets)
 cat /opt/app/config/aws-config | /opt/app/config_interpol > "/home/${APP_USER}/.aws/config"
