@@ -192,24 +192,35 @@ class Snapshot(Thread):
                     device_key = output_trigger['device_key']
                     device_label = output_trigger['device_label']
                     if 'device_params' in output_trigger:
-                        camera_command = output_trigger['device_params']
+                        camera_config = output_trigger['device_params']
                 else:
                     timestamp = make_timestamp()
-                    device_key, device_label = output_trigger
+                    device_key, device_label, camera_config = output_trigger
                 if device_key not in self.cameras:
                     log.error("Camera configuration missing for '{}.'".format(device_label))
                     post_count_metric('Errors')
                     continue
-                camera_profile = self.cameras[device_key]
-                camera_command = self.default_command
+                camera_storage = self.cameras[device_key]['storage']
+                # extract connection configuration
+                camera_auth, camera_url = camera_config.split('@')
+                if ':' not in camera_auth or ':' not in camera_url:
+                    log.error("Camera parameters missing for '{}.'".format(device_label))
+                    post_count_metric('Errors')
+                    continue
+                camera_url_parts = camera_url.split(',')
+                if len(camera_url_parts) == 1:
+                    camera_url = camera_url_parts[0]
+                    rtsp_port = camera_url.split(':')[1]
+                elif len(camera_url_parts) == 2:
+                    camera_url, rtsp_port = camera_url_parts
                 # unclear whether cam supports requests auth header
-                camera_auth_user, camera_auth_password = camera_profile['auth'].split(':')
+                camera_auth_user, camera_auth_password = camera_auth.split(':')
                 image_data = None
                 # grab a first frame for overall context
                 for tries in range(1, 4):
                     try:
-                        r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_profile['url']), params={
-                            'cmd': camera_command,
+                        r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_url), params={
+                            'cmd': self.default_command,
                             'usr': camera_auth_user,
                             'pwd': camera_auth_password,
                         })
@@ -217,12 +228,12 @@ class Snapshot(Thread):
                         im = Image.open(BytesIO(image_data))
                         break
                     except (OSError, ConnectionError, RequestException) as e:
-                        log.warning("Problem getting image from {}. Retrying...".format(camera_profile['url']),
+                        log.warning("Problem getting image from {}. Retrying...".format(camera_url),
                                     exc_info=1)
                         sleep(0.1)
                         if tries >= 3:
                             log.error("Giving up getting image from {} after {} tries: {}".format(
-                                camera_profile['url'],
+                                camera_url,
                                 tries,
                                 repr(e)))
                             post_count_metric('Errors')
@@ -250,13 +261,13 @@ class Snapshot(Thread):
                     if capture_thread and capture_thread.is_alive():
                         log.info('Not starting additional capture thread for {} which is still alive.'.format(device_key))
                     else:
-                        camera_ip, port = camera_profile['url'].split(':')
-                        port = camera_profile['rtsp_port']
+                        camera_ip, port = camera_url.split(':')
+                        port = rtsp_port
                         capture_thread = FrameServer(
                             camera_name=device_key,
-                            camera_auth=camera_profile['auth'],
+                            camera_auth=camera_auth,
                             camera_address=':'.join([camera_ip, port]),
-                            parent_path=camera_profile['storage'],
+                            parent_path=camera_storage,
                             snapshot_timestamp=unix_timestamp,
                             publisher_data=publisher_data)
                         # replace the existing thread
@@ -267,7 +278,7 @@ class Snapshot(Thread):
                     # send image data for processing
                     self.face_detector_socket.send_pyobj((
                         None,
-                        camera_profile['storage'],
+                        camera_storage,
                         unix_timestamp,
                         publisher_data
                     ))
@@ -275,7 +286,7 @@ class Snapshot(Thread):
                 self.publisher.send_pyobj(publisher_data)
                 # create output file path
                 output_filename = create_snapshot_path(
-                    parent_path=camera_profile['storage'],
+                    parent_path=camera_storage,
                     operation='fetch',
                     unix_timestamp=unix_timestamp,
                     file_extension=self.default_image_format)
@@ -1001,9 +1012,6 @@ if __name__ == "__main__":
     input_locations = dict(APP_CONFIG.items('input_location'))
     output_types = dict(APP_CONFIG.items('output_type'))
     output_locations = dict(APP_CONFIG.items('output_location'))
-    camera_urls = dict(APP_CONFIG.items('camera_url'))
-    camera_rtsp_ports = dict(APP_CONFIG.items('camera_rtsp_port'))
-    camera_auths = dict(APP_CONFIG.items('camera_auth'))
     device_info = dict()
     device_info['inputs'] = list()
     for field, input_type in list(input_types.items()):
@@ -1041,9 +1049,6 @@ if __name__ == "__main__":
             # now build the profile for internal use
             camera_profile = output_device.copy()
             camera_profile.update({
-                'url': camera_urls[field],
-                'rtsp_port': camera_rtsp_ports[field],
-                'auth': camera_auths[field],
                 'storage': os.path.join(
                     snapshot_root, 
                     APP_CONFIG.get('snapshots', 'upload_dir'), 
