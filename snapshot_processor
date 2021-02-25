@@ -88,7 +88,7 @@ from pylib.aws.swf import SWFActivityWaiter, \
 from pylib.process import SignalHandler, exec_cmd
 from pylib import threads
 from pylib.threads import thread_nanny
-from pylib.zmq import Publisher, URL_WORKER_PUBLISHER
+from pylib.zmq import AppPuller, Publisher, URL_WORKER_PUBLISHER
 
 # expose builtins for lint-friendly
 log = builtins.log
@@ -193,9 +193,12 @@ class Snapshot(Thread):
                     device_label = output_trigger['device_label']
                     if 'device_params' in output_trigger:
                         camera_config = output_trigger['device_params']
-                else:
+                elif isinstance(output_trigger, tuple):
                     timestamp = make_timestamp()
                     device_key, device_label, camera_config = output_trigger
+                else:
+                    log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
+                    continue
                 if device_key not in self.cameras:
                     log.error("Camera configuration missing for '{}.'".format(device_label))
                     post_count_metric('Errors')
@@ -1091,6 +1094,10 @@ if __name__ == "__main__":
     # start threads
     snapshotter.start()
     threads.threads_tracked.add(snapshotter.getName())
+    # start external PULL socket
+    puller = AppPuller(push_ip=APP_CONFIG.get('app', 'eth0_ip'), push_port=APP_CONFIG.get('zmq', 'pushpull_port'))
+    puller.start()
+    threads.threads_tracked.add(puller.getName())
     # start the collectors
     observer.start()
     threads.threads_tracked.add(observer.getName())
