@@ -137,6 +137,70 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
         "{}_".format(operation) + str(unix_timestamp) + '.' + file_extension)
 
 
+class CameraConfig(object):
+
+    def __init__(self, device_key, camera_config, camera_storage):
+        # extract connection configuration from something of this format:
+        # username:password@ip:port,rtsp_port
+        camera_auth, camera_url = camera_config.split('@')
+        if ':' not in camera_auth or ':' not in camera_url:
+            raise AssertionError("Camera parameters missing for '{}.'".format(device_key))
+        # split the rtsp port number
+        camera_url_parts = camera_url.split(',')
+        if len(camera_url_parts) == 1:
+            camera_url = camera_url_parts[0]
+            rtsp_port = camera_url.split(':')[1]
+        elif len(camera_url_parts) == 2:
+            camera_url, rtsp_port = camera_url_parts
+        # set locals
+        self._name = device_key
+        self._basic_auth = camera_auth
+        self._username, self._password = camera_auth.split(':')
+        self._url = camera_url
+        self._ip, self._port = camera_url.split(':')
+        self._rtsp_port = rtsp_port
+        self._camera_storage = camera_storage
+
+    def __str__(self) -> str:
+        return self._url
+
+    @property.getter
+    def name(self):
+        return self._name
+
+    @property.getter
+    def basic_auth(self):
+        return self._basic_auth
+
+    @property.getter
+    def username(self):
+        return self._username
+
+    @property.getter
+    def password(self):
+        return self._password
+
+    @property.getter
+    def url(self):
+        return self._url
+
+    @property.getter
+    def ip(self):
+        return self._ip
+
+    @property.getter
+    def port(self):
+        return self._port
+
+    @property.getter
+    def rtsp_port(self):
+        return self.rtsp_port
+
+    @property.getter
+    def camera_storage(self):
+        return self._camera_storage
+
+
 class FileType(object):
 
     def __init__(self):
@@ -180,7 +244,7 @@ class Snapshot(Thread):
         self.capture_threads = {}
 
     def run(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER)
+        self.publisher.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
         if self.face_detector_socket:
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         while True:
@@ -192,10 +256,10 @@ class Snapshot(Thread):
                     device_key = output_trigger['device_key']
                     device_label = output_trigger['device_label']
                     if 'device_params' in output_trigger:
-                        camera_config = output_trigger['device_params']
+                        camera_config_string = output_trigger['device_params']
                 elif isinstance(output_trigger, tuple):
                     timestamp = make_timestamp()
-                    device_key, device_label, camera_config = output_trigger
+                    device_key, device_label, camera_config_string = output_trigger
                 else:
                     log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
                     continue
@@ -203,40 +267,33 @@ class Snapshot(Thread):
                     log.error("Camera configuration missing for '{}.'".format(device_label))
                     post_count_metric('Errors')
                     continue
-                camera_storage = self.cameras[device_key]['storage']
-                # extract connection configuration
-                camera_auth, camera_url = camera_config.split('@')
-                if ':' not in camera_auth or ':' not in camera_url:
-                    log.error("Camera parameters missing for '{}.'".format(device_label))
+                try:
+                    camera_config = CameraConfig(
+                        device_key=device_key,
+                        camera_config=camera_config_string,
+                        camera_storage=self.cameras[device_key]['storage'])
+                except AssertionError:
                     post_count_metric('Errors')
                     continue
-                camera_url_parts = camera_url.split(',')
-                if len(camera_url_parts) == 1:
-                    camera_url = camera_url_parts[0]
-                    rtsp_port = camera_url.split(':')[1]
-                elif len(camera_url_parts) == 2:
-                    camera_url, rtsp_port = camera_url_parts
-                # unclear whether cam supports requests auth header
-                camera_auth_user, camera_auth_password = camera_auth.split(':')
                 image_data = None
                 # grab a first frame for overall context
                 for tries in range(1, 4):
                     try:
-                        r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_url), params={
+                        r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_config.url), params={
                             'cmd': self.default_command,
-                            'usr': camera_auth_user,
-                            'pwd': camera_auth_password,
+                            'usr': camera_config.username,
+                            'pwd': camera_config.password,
                         })
                         image_data = r.content
                         im = Image.open(BytesIO(image_data))
                         break
                     except (OSError, ConnectionError, RequestException) as e:
-                        log.warning("Problem getting image from {}. Retrying...".format(camera_url),
+                        log.warning("Problem getting image from {}. Retrying...".format(camera_config),
                                     exc_info=1)
                         sleep(0.1)
                         if tries >= 3:
                             log.error("Giving up getting image from {} after {} tries: {}".format(
-                                camera_url,
+                                camera_config,
                                 tries,
                                 repr(e)))
                             post_count_metric('Errors')
@@ -264,13 +321,8 @@ class Snapshot(Thread):
                     if capture_thread and capture_thread.is_alive():
                         log.info('Not starting additional capture thread for {} which is still alive.'.format(device_key))
                     else:
-                        camera_ip, port = camera_url.split(':')
-                        port = rtsp_port
                         capture_thread = FrameServer(
-                            camera_name=device_key,
-                            camera_auth=camera_auth,
-                            camera_address=':'.join([camera_ip, port]),
-                            parent_path=camera_storage,
+                            camera_config=camera_config,
                             snapshot_timestamp=unix_timestamp,
                             publisher_data=publisher_data)
                         # replace the existing thread
@@ -281,7 +333,7 @@ class Snapshot(Thread):
                     # send image data for processing
                     self.face_detector_socket.send_pyobj((
                         None,
-                        camera_storage,
+                        camera_config.camera_storage,
                         unix_timestamp,
                         publisher_data
                     ))
@@ -289,7 +341,7 @@ class Snapshot(Thread):
                 self.publisher.send_pyobj(publisher_data)
                 # create output file path
                 output_filename = create_snapshot_path(
-                    parent_path=camera_storage,
+                    parent_path=camera_config.camera_storage,
                     operation='fetch',
                     unix_timestamp=unix_timestamp,
                     file_extension=self.default_image_format)
@@ -847,7 +899,7 @@ class FaceDetector(Thread):
 
 class FrameServer(Thread):
 
-    def __init__(self, camera_name, camera_auth, camera_address, parent_path, snapshot_timestamp, publisher_data):
+    def __init__(self, camera_config, snapshot_timestamp, publisher_data):
         super(FrameServer, self).__init__()
         self.name = self.__class__.__name__
         self.daemon = True
@@ -855,13 +907,13 @@ class FrameServer(Thread):
         self.detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
         self.capture_duration_seconds = APP_CONFIG.getint('camera', 'rtsp_capture_duration_seconds')
         self.rtsp_url = 'rtsp://{}@{}/{}'.format(
-            camera_auth,
-            camera_address,
+            camera_config.basic_auth,
+            camera_config.url,
             APP_CONFIG.get('camera', 'rtsp_path'))
-        self.camera_name = camera_name
-        self.camera_address = camera_address
+        self.camera_name = camera_config.name
+        self.camera_address = camera_config.url
         # to send to face detector
-        self.parent_path = parent_path
+        self.parent_path = camera_config.camera_storage
         self.snapshot_timestamp = snapshot_timestamp
         self.publisher_data = publisher_data
 
