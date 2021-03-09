@@ -704,7 +704,7 @@ class UploadEventHandler(FileSystemEventHandler):
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
 
         self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
-        self.publisher.connect(URL_WORKER_PUBLISHER)
+        self.publisher.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
 
         self._cloud_storage_url = None
 
@@ -821,7 +821,7 @@ class FaceDetector(Thread):
         self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
 
     def run(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER)
+        self.publisher.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
         while True:
             active_device = None
             try:
@@ -1115,7 +1115,7 @@ if __name__ == "__main__":
     # threads that we want to ensure are alive
     publisher = Publisher(
         zmq_context=zmq_context,
-        zmq_ipc_url=URL_WORKER_PUBLISHER,
+        zmq_ipc_url=URL_WORKER_PUBLISHER, # pylint: disable=undefined-variable
         pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
         pub_port=APP_CONFIG.get('zmq', 'pubsub_port'))
     publisher.start()
@@ -1160,7 +1160,7 @@ if __name__ == "__main__":
     f.setDaemon(True)
     f.start()
     publisher_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
-    publisher_socket.connect(URL_WORKER_PUBLISHER)
+    publisher_socket.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
     try:
         # startup completed
         # back to INFO logging
