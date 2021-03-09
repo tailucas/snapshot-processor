@@ -268,6 +268,10 @@ class Snapshot(Thread):
                     if 'device_params' in output_trigger:
                         camera_config_string = output_trigger['device_params']
                 elif isinstance(output_trigger, tuple):
+                    #FIXME
+                    if len(output_trigger) > 3:
+                        log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
+                        continue
                     timestamp = make_timestamp()
                     device_key, device_label, camera_config_string = output_trigger
                 else:
