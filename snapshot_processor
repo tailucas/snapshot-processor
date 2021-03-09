@@ -139,7 +139,7 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
 
 class CameraConfig(object):
 
-    def __init__(self, device_key, device_label, camera_config, camera_storage):
+    def __init__(self, device_key, device_label, camera_config, camera_storage=None):
         # extract connection configuration from something of this format:
         # username:password@ip:port,rtsp_port
         camera_auth, camera_url = camera_config.split('@')
