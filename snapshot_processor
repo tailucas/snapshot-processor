@@ -139,7 +139,7 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
 
 class CameraConfig(object):
 
-    def __init__(self, device_key, camera_config, camera_storage):
+    def __init__(self, device_key, device_label, camera_config, camera_storage):
         # extract connection configuration from something of this format:
         # username:password@ip:port,rtsp_port
         camera_auth, camera_url = camera_config.split('@')
@@ -154,6 +154,8 @@ class CameraConfig(object):
             camera_url, rtsp_port = camera_url_parts
         # set locals
         self._name = device_key
+        self._device_key = device_key
+        self._device_label = device_label
         self._basic_auth = camera_auth
         self._username, self._password = camera_auth.split(':')
         self._url = camera_url
@@ -164,39 +166,47 @@ class CameraConfig(object):
     def __str__(self) -> str:
         return self._url
 
-    @property.getter
+    @property
     def name(self):
         return self._name
 
-    @property.getter
+    @property
+    def device_key(self):
+        return self._device_key
+
+    @property
+    def device_label(self):
+        return self._device_label
+
+    @property
     def basic_auth(self):
         return self._basic_auth
 
-    @property.getter
+    @property
     def username(self):
         return self._username
 
-    @property.getter
+    @property
     def password(self):
         return self._password
 
-    @property.getter
+    @property
     def url(self):
         return self._url
 
-    @property.getter
+    @property
     def ip(self):
         return self._ip
 
-    @property.getter
+    @property
     def port(self):
         return self._port
 
-    @property.getter
+    @property
     def rtsp_port(self):
         return self.rtsp_port
 
-    @property.getter
+    @property
     def camera_storage(self):
         return self._camera_storage
 
@@ -270,6 +280,7 @@ class Snapshot(Thread):
                 try:
                     camera_config = CameraConfig(
                         device_key=device_key,
+                        device_label=device_label,
                         camera_config=camera_config_string,
                         camera_storage=self.cameras[device_key]['storage'])
                 except AssertionError:
