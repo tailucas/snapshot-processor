@@ -137,6 +137,20 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
         "{}_".format(operation) + str(unix_timestamp) + '.' + file_extension)
 
 
+def create_publisher_struct(device_key, device_label, image_data, storage_url):
+    return {
+        'active_devices': [
+            {
+                'device_key': device_key,
+                'device_label': device_label,
+                'type': 'camera',
+                'image': image_data,
+            }
+        ],
+        'storage_url': storage_url
+    }
+
+
 class CameraConfig(object):
 
     def __init__(self, device_key, device_label, camera_config, camera_storage=None):
@@ -317,17 +331,11 @@ class Snapshot(Thread):
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
                 # publisher data
-                publisher_data = {
-                    'active_devices': [
-                        {
-                            'device_key': device_key,
-                            'device_label': device_label,
-                            'type': 'camera',
-                            'image': image_data,
-                        }
-                    ],
-                    'storage_url': self.cloud_storage_url
-                }
+                publisher_data = create_publisher_struct(
+                    device_key=device_key,
+                    device_label=device_label,
+                    image_data=image_data,
+                    storage_url=self.cloud_storage_url)
                 # look for faces in a continuous stream
                 if APP_CONFIG.getboolean('camera', 'rtsp_capture_enabled'):
                     capture_thread = None
@@ -823,6 +831,53 @@ class UploadEventHandler(FileSystemEventHandler):
                     sleep(1)
 
 
+class FacePuller(AppPuller):
+
+    def __init__(self, camera_profiles, cloud_storage_url, push_ip, push_port):
+        super(FacePuller, self).__init__(push_ip, push_port)
+        self.cameras = camera_profiles
+        self.cloud_storage_url = cloud_storage_url
+        self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+
+    def startup(self):
+        self.publisher.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
+
+    def shutdown(self):
+        self.publisher.close()
+
+    def process_message(self):
+        # extract image data
+        md = self.listener.recv_json()
+        msg = self.listener.recv()
+        buf = memoryview(msg)
+        arr = np.frombuffer(buf, dtype=md['dtype'])
+        numpy_array=arr.reshape(md['shape'])
+        # extract metadata
+        device_key = md['device_key']
+        device_label = md['device_label']
+        face_num = md['face_num']
+        # storage configuration
+        parent_path = self.cameras[device_key]['storage']
+        unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
+        # create PIL Image object
+        pil_image = Image.fromarray(numpy_array)
+        # save the additional image data
+        face_snapshot_path = create_snapshot_path(
+            parent_path=parent_path,
+            operation="face{}".format(face_num),
+            unix_timestamp=unix_timestamp,
+            file_extension='jpg')
+        log.info("Saving face #{} to {}".format(face_num, face_snapshot_path))
+        pil_image.save(face_snapshot_path)
+        # publish this as an event
+        publisher_data = create_publisher_struct(
+            device_key=device_key,
+            device_label=device_label,
+            image_data=pil_image,
+            storage_url=self.cloud_storage_url)
+        self.publisher.send_pyobj(publisher_data)
+
+
 class FaceDetector(Thread):
 
     def __init__(self):
@@ -1162,7 +1217,11 @@ if __name__ == "__main__":
     snapshotter.start()
     threads.threads_tracked.add(snapshotter.getName())
     # start external PULL socket
-    puller = AppPuller(push_ip=APP_CONFIG.get('app', 'eth0_ip'), push_port=APP_CONFIG.get('zmq', 'pushpull_port'))
+    puller = FacePuller(
+        camera_profiles=camera_profiles,
+        cloud_storage_url=google_drive_uploader.cloud_storage_url,
+        push_ip=APP_CONFIG.get('app', 'eth0_ip'),
+        push_port=APP_CONFIG.get('zmq', 'pushpull_port'))
     puller.start()
     threads.threads_tracked.add(puller.getName())
     # start the collectors
