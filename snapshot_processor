@@ -868,13 +868,15 @@ class FacePuller(AppPuller):
             operation="face{}".format(face_num),
             unix_timestamp=unix_timestamp,
             file_extension='jpg')
-        log.info("Saving face #{} to {}".format(face_num, face_snapshot_path))
+        log.info("Saving face #{} from {} to {}".format(face_num, device_key, face_snapshot_path))
         pil_image.save(face_snapshot_path)
         # publish this as an event
+        image_output = BytesIO()
+        pil_image.save(image_output, format='JPEG')
         publisher_data = create_publisher_struct(
             device_key=device_key,
             device_label=device_label,
-            image_data=pil_image,
+            image_data=image_output.getvalue(),
             storage_url=self.cloud_storage_url)
         self.publisher.send_pyobj(publisher_data)
 
