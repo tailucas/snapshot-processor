@@ -6,6 +6,7 @@ botoflow
 face_recognition
 netifaces
 numpy
+onepasswordconnectsdk
 opencv-python-headless
 pathtools
 picamera

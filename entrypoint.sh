@@ -8,14 +8,14 @@ while [ -n "${STAY_DOWN:-}" ]; do
   sleep 3600
 done
 
-# Resin API key
-export RESIN_API_KEY="${RESIN_API_KEY:-$API_KEY_RESIN}"
+# Resin API key (prefer override from application/device environment)
+export RESIN_API_KEY="${API_KEY_RESIN:-$RESIN_API_KEY}"
 # root user access, prefer key
 mkdir -p /root/.ssh/
-if [ -n "$SSH_AUTHORIZED_KEY" ]; then
-  echo "$SSH_AUTHORIZED_KEY" > /root/.ssh/authorized_keys
-  chmod 600 /root/.ssh/authorized_keys
-elif [ -n "$ROOT_PASSWORD" ]; then
+
+echo "$(/opt/app/bin/python /opt/app/cred_tool <<< '{"s": {"opitem": "SSH", "opfield": ".password"}}')" > /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+if [ -n "${ROOT_PASSWORD:-}" ]; then
   echo "root:${ROOT_PASSWORD}" | chpasswd
   sed -i 's/PermitRootLogin without-password/PermitRootLogin yes/' /etc/ssh/sshd_config
   # SSH login fix. Otherwise user is kicked off after login
@@ -27,7 +27,7 @@ mkdir -p /run/sshd
 service ssh reload
 
 # client details
-echo "$GOOGLE_CLIENT_SECRETS" > /opt/app/client_secrets.json
+echo "$(/opt/app/bin/python /opt/app/cred_tool <<< '{"s": {"opitem": "Google", "opfield": "oath.client_secret"}}')" > /opt/app/client_secrets.json
 # we may already have a valid auth token
 if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
   echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
@@ -100,7 +100,6 @@ if [ -e /sys/devices/pwm-fan/tach_enable ]; then
 fi
 # AWS configuration (no tee for secrets)
 cat /opt/app/config/aws-config | /opt/app/config_interpol > "/home/${APP_USER}/.aws/config"
-cat /opt/app/config/aws-credentials | /opt/app/config_interpol > "/home/${APP_USER}/.aws/credentials"
 # patch botoflow to work-around
 # AttributeError: 'Endpoint' object has no attribute 'timeout'
 PY_BASE_WORKER="$(find /opt/app/ -name base_worker.py)"
@@ -137,11 +136,13 @@ fi
 # logentries
 if [ -n "${RSYSLOG_LOGENTRIES:-}" ]; then
   set +x
+  RSYSLOG_LOGENTRIES_TOKEN="$(/opt/app/bin/python /opt/app/cred_tool <<< '{"s": {"opitem": "Logentries", "opfield": "${RESIN_APP_NAME}.token"}}')"
   if [ -n "${RSYSLOG_LOGENTRIES_TOKEN:-}" ] && ! grep -q "$RSYSLOG_LOGENTRIES_TOKEN" /etc/rsyslog.d/logentries.conf; then
     echo "\$template LogentriesFormat,\"${RSYSLOG_LOGENTRIES_TOKEN} %HOSTNAME% %syslogtag%%msg%\n\"" >> /etc/rsyslog.d/logentries.conf
     RSYSLOG_TEMPLATE=";LogentriesFormat"
   fi
   echo "*.*          @@${RSYSLOG_LOGENTRIES_SERVER}${RSYSLOG_TEMPLATE:-}" >> /etc/rsyslog.d/logentries.conf
+  unset RSYSLOG_LOGENTRIES_TOKEN
   set -x
 fi
 # bounce rsyslog for the new data
@@ -149,14 +150,8 @@ if find /etc/rsyslog.d/ -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
   service rsyslog restart
 fi
 
-# log archival (no tee for secrets)
-if [ -d /var/awslogs/etc/ ]; then
-  cat /var/awslogs/etc/aws.conf | /opt/app/config_interpol /opt/app/config/aws.conf > /var/awslogs/etc/aws.conf.new
-  mv /var/awslogs/etc/aws.conf /var/awslogs/etc/aws.conf.backup
-  mv /var/awslogs/etc/aws.conf.new /var/awslogs/etc/aws.conf
-fi
-
 # FTP server setup
+FTP_USER="$(/opt/app/bin/python /opt/app/cred_tool <<< '{"s": {"opitem": "FTP", "opfield": ".username"}}')"
 id -u "${FTP_USER}" || useradd -r -g "${APP_GROUP}" "${FTP_USER}"
 FTP_HOME="/home/${FTP_USER}"
 mkdir -p "${FTP_HOME}/"
@@ -176,8 +171,10 @@ chown -R "${FTP_USER}:${APP_GROUP}" "${STORAGE_ROOT}/"
 chmod a-w "${FTP_ROOT}"
 # allow all in the same group to write
 chmod -R g+w "${FTP_ROOT}"
-
-echo "${FTP_USER}:${FTP_PASSWORD}" | chpasswd
+set +x
+echo "${FTP_USER}:$(/opt/app/bin/python /opt/app/cred_tool <<< '{"s": {"opitem": "FTP", "opfield": ".password"}}')" | chpasswd
+set -x
+unset FTP_USER
 
 cat /etc/vsftpd.conf | /opt/app/config_interpol /opt/app/config/vsftpd.conf | sort | tee /etc/vsftpd.conf.new
 mv /etc/vsftpd.conf /etc/vsftpd.conf.backup
