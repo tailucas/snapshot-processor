@@ -34,11 +34,7 @@ if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
 fi
 # Google Refresh Token restore
 if [ ! -f /data/snapshot_processor_creds ]; then
-  set +u # work around venv stupidity
-  . /opt/app/bin/activate
-  aws s3 cp s3://tailucas-automation/snapshot_processor_creds /data/snapshot_processor_creds
-  deactivate
-  set -u
+  /opt/app/backup_auth_token.sh
 fi
 
 # aws code commit
