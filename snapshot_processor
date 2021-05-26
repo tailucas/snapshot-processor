@@ -266,17 +266,17 @@ class Snapshot(Thread):
         self.default_image_format = APP_CONFIG.get('camera', 'default_image_format')
 
         self.cloud_storage_url = cloud_storage_url
-        self.socket = zmq_context.socket(zmq.PULL) # pylint: disable=no-member
-        self.socket.bind(URL_WORKER_APP) # pylint: disable=undefined-variable
+        self.socket = zmq_context.socket(zmq.PULL) # type: ignore
+        self.socket.bind(URL_WORKER_APP) # type: ignore
 
-        self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.publisher = zmq_context.socket(zmq.PUSH) # type: ignore
         self.face_detector_socket = None
         if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
-            self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+            self.face_detector_socket = zmq_context.socket(zmq.PUSH) # type: ignore
         self.capture_threads = {}
 
     def run(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
+        self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
         if self.face_detector_socket:
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         while True:
@@ -426,7 +426,7 @@ class DeviceEvent(object):
 
     @property
     def timestamp_string(self):
-        return self.timestamp.strftime(ISO_DATE_FORMAT) # pylint: disable=undefined-variable
+        return self.timestamp.strftime(ISO_DATE_FORMAT) # type: ignore
 
     @property
     def event_detail(self):
@@ -646,7 +646,7 @@ class GoogleDriveUploader(GoogleDriveManager):
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.socket = zmq_context.socket(zmq.PULL) # pylint: disable=no-member
+        self.socket = zmq_context.socket(zmq.PULL) # type: ignore
         self.socket.bind(URL_WORKER_CLOUD_STORAGE)
 
         # determine the Drive folder details synchronously
@@ -726,16 +726,16 @@ class UploadEventHandler(FileSystemEventHandler):
 
         fs_observer.schedule(self, self._snapshot_root, recursive=True)
 
-        self.cloud_storage_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.cloud_storage_socket = zmq_context.socket(zmq.PUSH) # type: ignore
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
         self.face_detector_socket = None
         if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
-            self.face_detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+            self.face_detector_socket = zmq_context.socket(zmq.PUSH) # type: ignore
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
 
-        self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
-        self.publisher.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
+        self.publisher = zmq_context.socket(zmq.PUSH) # type: ignore
+        self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
 
         self._cloud_storage_url = None
 
@@ -845,10 +845,10 @@ class FacePuller(AppPuller):
         super(FacePuller, self).__init__(push_ip, push_port)
         self.cameras = camera_profiles
         self.cloud_storage_url = cloud_storage_url
-        self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.publisher = zmq_context.socket(zmq.PUSH) # type: ignore
 
     def startup(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
+        self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
 
     def shutdown(self):
         self.publisher.close()
@@ -896,13 +896,13 @@ class FaceDetector(Thread):
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.socket = zmq_context.socket(zmq.PULL) # pylint: disable=no-member
+        self.socket = zmq_context.socket(zmq.PULL) # type: ignore
         self.socket.bind(URL_WORKER_FACE_DETECTOR)
 
-        self.publisher = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.publisher = zmq_context.socket(zmq.PUSH) # type: ignore
 
     def run(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
+        self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
         while True:
             active_device = None
             try:
@@ -985,7 +985,7 @@ class FrameServer(Thread):
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.detector_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
+        self.detector_socket = zmq_context.socket(zmq.PUSH) # type: ignore
         self.capture_duration_seconds = APP_CONFIG.getint('camera', 'rtsp_capture_duration_seconds')
         self.rtsp_url = 'rtsp://{}@{}/{}'.format(
             camera_config.basic_auth,
@@ -1008,7 +1008,7 @@ class FrameServer(Thread):
             frame_server_mutex.acquire()
             log.info('Starting video capture from {}@{}...'.format(self.camera_name, self.camera_address))
             #TODO: https://github.com/ageitgey/face_recognition/issues/659#issuecomment-468008178
-            capture = cv2.VideoCapture(self.rtsp_url) # pylint: disable=no-member
+            capture = cv2.VideoCapture(self.rtsp_url) # type: ignore
             log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_name, self.camera_address, self.capture_duration_seconds))
             start_time = time.time()
             #TODO: adjust based on time for first frame
@@ -1022,7 +1022,7 @@ class FrameServer(Thread):
                     continue
                 frame_count += 1
                 active_device = self.publisher_data['active_devices'][0]
-                active_device['cv2_frame'] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) # pylint: disable=no-member
+                active_device['cv2_frame'] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) # type: ignore
                 self.detector_socket.send_pyobj((
                     None,
                     self.parent_path,
@@ -1130,7 +1130,7 @@ if __name__ == "__main__":
     if os.path.exists(os.path.join(pwm_device_path_prefix, 'target_pwm')):
         pwm_fan_control = PwmFanControl(pwm_device_path_prefix)
     # connect to SWF
-    swf_activity = SnapshotActivity(URL_WORKER_APP) # pylint: disable=undefined-variable
+    swf_activity = SnapshotActivity(URL_WORKER_APP) # type: ignore
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
                                             swf_region,
                                             swf_domain,
@@ -1196,7 +1196,7 @@ if __name__ == "__main__":
     # threads that we want to ensure are alive
     publisher = Publisher(
         zmq_context=zmq_context,
-        zmq_ipc_url=URL_WORKER_PUBLISHER, # pylint: disable=undefined-variable
+        zmq_ipc_url=URL_WORKER_PUBLISHER, # type: ignore
         pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
         pub_port=APP_CONFIG.get('zmq', 'pubsub_port'))
     publisher.start()
@@ -1244,8 +1244,8 @@ if __name__ == "__main__":
     f = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
     f.setDaemon(True)
     f.start()
-    publisher_socket = zmq_context.socket(zmq.PUSH) # pylint: disable=no-member
-    publisher_socket.connect(URL_WORKER_PUBLISHER) # pylint: disable=undefined-variable
+    publisher_socket = zmq_context.socket(zmq.PUSH) # type: ignore
+    publisher_socket.connect(URL_WORKER_PUBLISHER) # type: ignore
     try:
         # startup completed
         # back to INFO logging
