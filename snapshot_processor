@@ -68,7 +68,9 @@ from botoflow.constants import SECONDS, MINUTES
 from botoflow.exceptions import ActivityTaskFailedError, \
     WorkflowFailedError, WorkflowTimedOutError
 
-builtins.APP_NAME = Path(__file__).stem
+# setup builtins used by pylib init
+app_name = Path(__file__).stem
+builtins.APP_NAME = app_name
 builtins.SENTRY_EXTRAS = []
 AWS_REGION = os.environ['AWS_DEFAULT_REGION']
 class CredsConfig:
@@ -78,7 +80,11 @@ class CredsConfig:
 # instantiate class
 builtins.creds_config = CredsConfig()
 
-import lib
+from lib import app_config, \
+    creds, \
+    device_name, \
+    device_name_base, \
+    log
 
 from lib.bluetooth import bluetooth_init, ping_bluetooth_devices
 from lib.datetime import is_list, make_timestamp, parse_datetime
@@ -96,14 +102,7 @@ from lib.aws.swf import SWFActivityWaiter, \
 from lib.process import SignalHandler, exec_cmd
 from lib import threads
 from lib.threads import thread_nanny
-from lib.zmq import AppPuller, Publisher
-
-# expose builtins for lint-friendly
-log = builtins.log
-APP_CONFIG = builtins.APP_CONFIG
-zmq_context = builtins.zmq_context
-APP_NAME = builtins.APP_NAME
-DEVICE_NAME = builtins.DEVICE_NAME
+from lib.zmq import zmq_context, zmq_socket, AppPuller, Publisher
 
 URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
@@ -262,17 +261,17 @@ class Snapshot(Thread):
         self.daemon = True
 
         self.cameras = camera_profiles
-        self.default_command = APP_CONFIG.get('camera', 'default_command')
-        self.default_image_format = APP_CONFIG.get('camera', 'default_image_format')
+        self.default_command = app_config.get('camera', 'default_command')
+        self.default_image_format = app_config.get('camera', 'default_image_format')
 
         self.cloud_storage_url = cloud_storage_url
-        self.socket = zmq_context.socket(zmq.PULL) # type: ignore
+        self.socket = zmq_socket(zmq.PULL) # type: ignore
         self.socket.bind(URL_WORKER_APP) # type: ignore
 
-        self.publisher = zmq_context.socket(zmq.PUSH) # type: ignore
+        self.publisher = zmq_socket(zmq.PUSH) # type: ignore
         self.face_detector_socket = None
-        if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
-            self.face_detector_socket = zmq_context.socket(zmq.PUSH) # type: ignore
+        if app_config.getboolean('snapshots', 'face_detection_enabled'):
+            self.face_detector_socket = zmq_socket(zmq.PUSH) # type: ignore
         self.capture_threads = {}
 
     def run(self):
@@ -345,7 +344,7 @@ class Snapshot(Thread):
                     image_data=image_data,
                     storage_url=self.cloud_storage_url)
                 # look for faces in a continuous stream
-                if APP_CONFIG.getboolean('camera', 'rtsp_capture_enabled'):
+                if app_config.getboolean('camera', 'rtsp_capture_enabled'):
                     capture_thread = None
                     if device_key in self.capture_threads:
                         capture_thread = self.capture_threads[device_key]
@@ -523,7 +522,7 @@ class GoogleDriveManager(Thread, CloudStorage):
                 return None
             log.debug("Creating Google Drive folder '{}' in parent folder '{}'".format(gdrive_folder, parent_id))
             folder = gdrive.CreateFile({
-                'description': "Created by {}".format(APP_NAME), 'title': gdrive_folder,
+                'description': "Created by {}".format(app_name), 'title': gdrive_folder,
                 'mimeType': 'application/vnd.google-apps.folder',
                 'parents': [{"kind": "drive#parentReference", "id": parent_id}]
             })
@@ -646,7 +645,7 @@ class GoogleDriveUploader(GoogleDriveManager):
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.socket = zmq_context.socket(zmq.PULL) # type: ignore
+        self.socket = zmq_socket(zmq.PULL) # type: ignore
         self.socket.bind(URL_WORKER_CLOUD_STORAGE)
 
         # determine the Drive folder details synchronously
@@ -726,15 +725,15 @@ class UploadEventHandler(FileSystemEventHandler):
 
         fs_observer.schedule(self, self._snapshot_root, recursive=True)
 
-        self.cloud_storage_socket = zmq_context.socket(zmq.PUSH) # type: ignore
+        self.cloud_storage_socket = zmq_socket(zmq.PUSH) # type: ignore
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
         self.face_detector_socket = None
-        if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
-            self.face_detector_socket = zmq_context.socket(zmq.PUSH) # type: ignore
+        if app_config.getboolean('snapshots', 'face_detection_enabled'):
+            self.face_detector_socket = zmq_socket(zmq.PUSH) # type: ignore
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
 
-        self.publisher = zmq_context.socket(zmq.PUSH) # type: ignore
+        self.publisher = zmq_socket(zmq.PUSH) # type: ignore
         self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
 
         self._cloud_storage_url = None
@@ -845,7 +844,7 @@ class FacePuller(AppPuller):
         super(FacePuller, self).__init__(push_ip, push_port)
         self.cameras = camera_profiles
         self.cloud_storage_url = cloud_storage_url
-        self.publisher = zmq_context.socket(zmq.PUSH) # type: ignore
+        self.publisher = zmq_socket(zmq.PUSH) # type: ignore
 
     def startup(self):
         self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
@@ -896,10 +895,10 @@ class FaceDetector(Thread):
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.socket = zmq_context.socket(zmq.PULL) # type: ignore
+        self.socket = zmq_socket(zmq.PULL) # type: ignore
         self.socket.bind(URL_WORKER_FACE_DETECTOR)
 
-        self.publisher = zmq_context.socket(zmq.PUSH) # type: ignore
+        self.publisher = zmq_socket(zmq.PUSH) # type: ignore
 
     def run(self):
         self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
@@ -932,7 +931,7 @@ class FaceDetector(Thread):
                 faces = face_locations(
                     image,
                     number_of_times_to_upsample=0,
-                    model=APP_CONFIG.get('snapshots', 'face_detection_model'))
+                    model=app_config.get('snapshots', 'face_detection_model'))
                 if (len(faces) > 0):
                     log.info("{} faces detected.".format(len(faces)))
                 else:
@@ -985,12 +984,12 @@ class FrameServer(Thread):
         self.name = self.__class__.__name__
         self.daemon = True
 
-        self.detector_socket = zmq_context.socket(zmq.PUSH) # type: ignore
-        self.capture_duration_seconds = APP_CONFIG.getint('camera', 'rtsp_capture_duration_seconds')
+        self.detector_socket = zmq_socket(zmq.PUSH) # type: ignore
+        self.capture_duration_seconds = app_config.getint('camera', 'rtsp_capture_duration_seconds')
         self.rtsp_url = 'rtsp://{}@{}/{}'.format(
             camera_config.basic_auth,
             camera_config.url,
-            APP_CONFIG.get('camera', 'rtsp_path'))
+            app_config.get('camera', 'rtsp_path'))
         self.camera_name = camera_config.name
         self.camera_address = camera_config.url
         # to send to face detector
@@ -1134,20 +1133,20 @@ if __name__ == "__main__":
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
                                             swf_region,
                                             swf_domain,
-                                            APP_NAME,
+                                            app_name,
                                             swf_activity, DeviceInfoActivity()))
     swf_worker._worker.unhandled_exception_handler = swf_exception_handler
     swf_worker.start()
     # file system listener
     observer = Observer()
     observer.name = observer.__class__.__name__
-    snapshot_root = APP_CONFIG.get('snapshots', 'root_dir')
+    snapshot_root = app_config.get('snapshots', 'root_dir')
     upload_event_handler = UploadEventHandler(snapshot_root=snapshot_root, fs_observer=observer)
     # construct the device representation
-    input_types = dict(APP_CONFIG.items('input_type'))
-    input_locations = dict(APP_CONFIG.items('input_location'))
-    output_types = dict(APP_CONFIG.items('output_type'))
-    output_locations = dict(APP_CONFIG.items('output_location'))
+    input_types = dict(app_config.items('input_type'))
+    input_locations = dict(app_config.items('input_location'))
+    output_types = dict(app_config.items('output_type'))
+    output_locations = dict(app_config.items('output_location'))
     device_info = dict()
     device_info['inputs'] = list()
     for field, input_type in list(input_types.items()):
@@ -1164,7 +1163,7 @@ if __name__ == "__main__":
                 device_type=input_type,
                 device_location=input_location,
                 image_dir=os.path.join(
-                    APP_CONFIG.get('snapshots', 'upload_dir'),
+                    app_config.get('snapshots', 'upload_dir'),
                     input_location.lower().replace(' ', '')))
     device_info['outputs'] = list()
     camera_profiles = {}
@@ -1187,7 +1186,7 @@ if __name__ == "__main__":
             camera_profile.update({
                 'storage': os.path.join(
                     snapshot_root, 
-                    APP_CONFIG.get('snapshots', 'upload_dir'), 
+                    app_config.get('snapshots', 'upload_dir'), 
                     output_location.lower().replace(' ', ''))
             })
             camera_profiles[device_key] = camera_profile
@@ -1197,12 +1196,12 @@ if __name__ == "__main__":
     publisher = Publisher(
         zmq_context=zmq_context,
         zmq_ipc_url=URL_WORKER_PUBLISHER, # type: ignore
-        pub_ip=APP_CONFIG.get('app', 'eth0_ip'),
-        pub_port=APP_CONFIG.get('zmq', 'pubsub_port'))
+        pub_ip=app_config.get('app', 'eth0_ip'),
+        pub_port=app_config.get('zmq', 'pubsub_port'))
     publisher.start()
     threads.threads_tracked.add(publisher.getName())
     # face detection
-    if APP_CONFIG.getboolean('snapshots', 'face_detection_enabled'):
+    if app_config.getboolean('snapshots', 'face_detection_enabled'):
         face_detector = FaceDetector()
     else:
         face_detector = None
@@ -1211,11 +1210,11 @@ if __name__ == "__main__":
     # ensure that auth is properly set up first
     try:
         google_drive_uploader = GoogleDriveUploader(
-            gauth_creds_file=APP_CONFIG.get('gdrive', 'creds_file'),
-            gdrive_folder=APP_CONFIG.get('gdrive', 'folder'))
+            gauth_creds_file=app_config.get('gdrive', 'creds_file'),
+            gdrive_folder=app_config.get('gdrive', 'folder'))
         google_drive_archiver = GoogleDriveArchiver(
-            gauth_creds_file=APP_CONFIG.get('gdrive', 'creds_file'),
-            gdrive_folder=APP_CONFIG.get('gdrive', 'folder'),
+            gauth_creds_file=app_config.get('gdrive', 'creds_file'),
+            gdrive_folder=app_config.get('gdrive', 'folder'),
             gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
             gdrive_folder_url=google_drive_uploader.cloud_storage_url)
     except Exception:
@@ -1231,8 +1230,8 @@ if __name__ == "__main__":
     puller = FacePuller(
         camera_profiles=camera_profiles,
         cloud_storage_url=google_drive_uploader.cloud_storage_url,
-        push_ip=APP_CONFIG.get('app', 'eth0_ip'),
-        push_port=APP_CONFIG.get('zmq', 'pushpull_port'))
+        push_ip=app_config.get('app', 'eth0_ip'),
+        push_port=app_config.get('zmq', 'pushpull_port'))
     puller.start()
     threads.threads_tracked.add(puller.getName())
     # start the collectors
@@ -1244,7 +1243,7 @@ if __name__ == "__main__":
     f = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
     f.setDaemon(True)
     f.start()
-    publisher_socket = zmq_context.socket(zmq.PUSH) # type: ignore
+    publisher_socket = zmq_socket(zmq.PUSH) # type: ignore
     publisher_socket.connect(URL_WORKER_PUBLISHER) # type: ignore
     try:
         # startup completed
