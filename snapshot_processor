@@ -84,7 +84,8 @@ from lib import app_config, \
     creds, \
     device_name, \
     device_name_base, \
-    log
+    log, \
+    URL_WORKER_PUBLISHER
 
 from lib.bluetooth import bluetooth_init, ping_bluetooth_devices
 from lib.datetime import is_list, make_timestamp, parse_datetime
@@ -102,7 +103,9 @@ from lib.aws.swf import SWFActivityWaiter, \
 from lib.process import SignalHandler, exec_cmd
 from lib import threads
 from lib.threads import thread_nanny
-from lib.zmq import zmq_context, zmq_socket, AppPuller, Publisher
+from lib.app import ZmqRelay, AppThread
+from lib.zmq import zmq_socket, zmq_term, Closable
+from lib.handler import exception_handler
 
 URL_WORKER_FACE_DETECTOR = 'inproc://face-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
@@ -254,11 +257,10 @@ class FileType(object):
 filetype = None
 
 
-class Snapshot(Thread):
+class Snapshot(AppThread):
 
     def __init__(self, camera_profiles, cloud_storage_url):
-        super(Snapshot, self).__init__(name=self.__class__.__name__)
-        self.daemon = True
+        AppThread.__init__(self, name=self.__class__.__name__)
 
         self.cameras = camera_profiles
         self.default_command = app_config.get('camera', 'default_command')
@@ -275,7 +277,7 @@ class Snapshot(Thread):
         self.capture_threads = {}
 
     def run(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
+        self.publisher.connect(URL_WORKER_PUBLISHER)
         if self.face_detector_socket:
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         while True:
@@ -462,12 +464,10 @@ class CloudStorage(object, metaclass=ABCMeta):
         return NotImplemented
 
 
-class GoogleDriveManager(Thread, CloudStorage):
+class GoogleDriveManager(AppThread, CloudStorage):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
-        super(GoogleDriveManager, self).__init__()
-        self.name = self.__class__.__name__
-        self.daemon = True
+        AppThread.__init__(self, name=self.__class__.__name__)
 
         self._gdrive_folder = gdrive_folder
         if '~' in gauth_creds_file:
@@ -734,7 +734,7 @@ class UploadEventHandler(FileSystemEventHandler):
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
 
         self.publisher = zmq_socket(zmq.PUSH) # type: ignore
-        self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
+        self.publisher.connect(URL_WORKER_PUBLISHER)
 
         self._cloud_storage_url = None
 
@@ -838,24 +838,21 @@ class UploadEventHandler(FileSystemEventHandler):
                     sleep(1)
 
 
-class FacePuller(AppPuller):
+class FacePuller(ZmqRelay):
 
-    def __init__(self, camera_profiles, cloud_storage_url, push_ip, push_port):
-        super(FacePuller, self).__init__(push_ip, push_port)
+    def __init__(self, camera_profiles, cloud_storage_url, source_zmq_url):
+        ZmqRelay.__init__(self,
+            source_zmq_url=source_zmq_url,
+            source_socket_type=zmq.PULL,
+            sink_zmq_url=URL_WORKER_PUBLISHER,
+            sink_socket_type=zmq.PUSH)
         self.cameras = camera_profiles
         self.cloud_storage_url = cloud_storage_url
-        self.publisher = zmq_socket(zmq.PUSH) # type: ignore
 
-    def startup(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
-
-    def shutdown(self):
-        self.publisher.close()
-
-    def process_message(self):
+    def process_message(self, zmq_socket):
         # extract image data
-        md = self.listener.recv_json()
-        msg = self.listener.recv()
+        md = zmq_socket.recv_json()
+        msg = zmq_socket.recv()
         buf = memoryview(msg)
         arr = np.frombuffer(buf, dtype=md['dtype'])
         numpy_array=arr.reshape(md['shape'])
@@ -885,15 +882,13 @@ class FacePuller(AppPuller):
             device_label=device_label,
             image_data=image_output.getvalue(),
             storage_url=self.cloud_storage_url)
-        self.publisher.send_pyobj(publisher_data)
+        self.socket.send_pyobj(publisher_data)
 
 
-class FaceDetector(Thread):
+class FaceDetector(AppThread):
 
     def __init__(self):
-        super(FaceDetector, self).__init__()
-        self.name = self.__class__.__name__
-        self.daemon = True
+        AppThread.__init__(self, self.__class__.__name__)
 
         self.socket = zmq_socket(zmq.PULL) # type: ignore
         self.socket.bind(URL_WORKER_FACE_DETECTOR)
@@ -901,7 +896,7 @@ class FaceDetector(Thread):
         self.publisher = zmq_socket(zmq.PUSH) # type: ignore
 
     def run(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER) # type: ignore
+        self.publisher.connect(URL_WORKER_PUBLISHER)
         while True:
             active_device = None
             try:
@@ -977,12 +972,10 @@ class FaceDetector(Thread):
                 continue
 
 
-class FrameServer(Thread):
+class FrameServer(AppThread):
 
     def __init__(self, camera_config, snapshot_timestamp, publisher_data):
-        super(FrameServer, self).__init__()
-        self.name = self.__class__.__name__
-        self.daemon = True
+        AppThread.__init__(self, self.__class__.__name__)
 
         self.detector_socket = zmq_socket(zmq.PUSH) # type: ignore
         self.capture_duration_seconds = app_config.getint('camera', 'rtsp_capture_duration_seconds')
@@ -1050,12 +1043,10 @@ class FrameServer(Thread):
             time.time() - start_time))
 
 
-class PwmFanControl(Thread):
+class PwmFanControl(AppThread):
 
     def __init__(self, pwm_device_path_prefix, pwm_decrement_rate=1):
-        Thread.__init__(self)
-        self.name = '{}'.format(self.__class__.__name__)
-        self.daemon = True
+        AppThread.__init__(self, name=self.__class__.__name__)
 
         self.rpm_measured_file = os.path.join(pwm_device_path_prefix, 'rpm_measured')
         self.target_pwm = os.path.join(pwm_device_path_prefix, 'target_pwm')
@@ -1192,14 +1183,6 @@ if __name__ == "__main__":
             camera_profiles[device_key] = camera_profile
     log.info('Monitoring directories in {} for changes: {}'.format(
         snapshot_root, str(upload_event_handler.watched_dirs)))
-    # threads that we want to ensure are alive
-    publisher = Publisher(
-        zmq_context=zmq_context,
-        zmq_ipc_url=URL_WORKER_PUBLISHER, # type: ignore
-        pub_ip=app_config.get('app', 'eth0_ip'),
-        pub_port=app_config.get('zmq', 'pubsub_port'))
-    publisher.start()
-    threads.threads_tracked.add(publisher.getName())
     # face detection
     if app_config.getboolean('snapshots', 'face_detection_enabled'):
         face_detector = FaceDetector()
@@ -1225,15 +1208,23 @@ if __name__ == "__main__":
     snapshotter = Snapshot(camera_profiles=camera_profiles, cloud_storage_url=google_drive_uploader.cloud_storage_url)
     # start threads
     snapshotter.start()
-    threads.threads_tracked.add(snapshotter.getName())
+    # ZMQ endpoints
+    pub_ip=app_config.get('app', 'eth0_ip')
+    pub_port=app_config.get('zmq', 'pubsub_port')
+    publisher = ZmqRelay(
+        source_zmq_url=URL_WORKER_PUBLISHER,
+        source_socket_type=zmq.PULL,
+        sink_zmq_url=f'tcp://{pub_ip}:{pub_port}',
+        sink_socket_type=zmq.PUB)
+    publisher.start()
     # start external PULL socket
+    push_ip=app_config.get('app', 'eth0_ip')
+    push_port=app_config.get('zmq', 'pushpull_port')
     puller = FacePuller(
         camera_profiles=camera_profiles,
         cloud_storage_url=google_drive_uploader.cloud_storage_url,
-        push_ip=app_config.get('app', 'eth0_ip'),
-        push_port=app_config.get('zmq', 'pushpull_port'))
+        source_zmq_url=f'tcp://{push_ip}:{push_port}')
     puller.start()
-    threads.threads_tracked.add(puller.getName())
     # start the collectors
     observer.start()
     threads.threads_tracked.add(observer.getName())
@@ -1243,8 +1234,7 @@ if __name__ == "__main__":
     f = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
     f.setDaemon(True)
     f.start()
-    publisher_socket = zmq_socket(zmq.PUSH) # type: ignore
-    publisher_socket.connect(URL_WORKER_PUBLISHER) # type: ignore
+    publisher_socket = zmq_socket(zmq.PUSH)
     try:
         # startup completed
         # back to INFO logging
@@ -1253,13 +1243,11 @@ if __name__ == "__main__":
             pwm_fan_control.start()
         if face_detector:
             face_detector.start()
-            threads.threads_tracked.add(face_detector.getName())
         # start Google Drive uploader
         google_drive_uploader.start()
-        threads.threads_tracked.add(google_drive_uploader.getName())
         # start the Google Driver archiver last
         google_drive_archiver.start()
-        threads.threads_tracked.add(google_drive_archiver.getName())
+        publisher_socket.connect(URL_WORKER_PUBLISHER)
         while not threads.shutting_down:
             publisher_socket.send_pyobj({
                 #TODO statistics
@@ -1283,8 +1271,7 @@ if __name__ == "__main__":
         upload_event_handler.close()
         # since this thread and the signal handler are one and the same
         publisher_socket.close()
-        log.info(message.format('ZMQ context'))
-        zmq_context.term()
+        zmq_term()
         log.info(message.format('SWF worker'))
         swf_worker.join()
         log.info('Shutdown complete.')
