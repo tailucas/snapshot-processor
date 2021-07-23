@@ -464,11 +464,9 @@ class CloudStorage(object, metaclass=ABCMeta):
         return NotImplemented
 
 
-class GoogleDriveManager(AppThread, CloudStorage):
+class GoogleDriveManager(CloudStorage):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
-        AppThread.__init__(self, name=self.__class__.__name__)
-
         self._gdrive_folder = gdrive_folder
         if '~' in gauth_creds_file:
             self._gauth_creds_file = os.path.expanduser(gauth_creds_file)
@@ -542,14 +540,13 @@ class GoogleDriveManager(AppThread, CloudStorage):
         return folder_id, folder_link
 
 
-class GoogleDriveArchiver(GoogleDriveManager):
+class GoogleDriveArchiver(AppThread, GoogleDriveManager):
 
     def __init__(self, gauth_creds_file, gdrive_folder, gdrive_folder_id, gdrive_folder_url):
-        super(GoogleDriveArchiver, self).__init__(
+        AppThread.__init__(self, name=self.__class__.__name__)
+        GoogleDriveManager.__init__(self,
             gauth_creds_file=gauth_creds_file,
             gdrive_folder=gdrive_folder)
-        self.name = self.__class__.__name__
-        self.daemon = True
 
         # separate connection for archiver thread to prevent PyDrive lock-up
         self._archive_drive = GoogleDrive(self.gauth)
@@ -636,14 +633,13 @@ class GoogleDriveArchiver(GoogleDriveManager):
         return False
 
 
-class GoogleDriveUploader(GoogleDriveManager):
+class GoogleDriveUploader(AppThread, GoogleDriveManager):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
-        super(GoogleDriveUploader, self).__init__(
+        AppThread.__init__(self, name = self.__class__.__name__)
+        GoogleDriveManager.__init__(self,
             gauth_creds_file=gauth_creds_file,
             gdrive_folder=gdrive_folder)
-        self.name = self.__class__.__name__
-        self.daemon = True
 
         self.socket = zmq_socket(zmq.PULL) # type: ignore
         self.socket.bind(URL_WORKER_CLOUD_STORAGE)
