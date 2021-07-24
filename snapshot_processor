@@ -85,6 +85,7 @@ from lib import app_config, \
     device_name, \
     device_name_base, \
     log, \
+    ISO_DATE_FORMAT, \
     URL_WORKER_APP, \
     URL_WORKER_PUBLISHER
 
@@ -276,7 +277,7 @@ class Snapshot(ZmqRelay):
 
         self.face_detector_socket = None
         if app_config.getboolean('snapshots', 'face_detection_enabled'):
-            self.face_detector_socket = self.get_socket(zmq.PUSH) # type: ignore
+            self.face_detector_socket = self.get_socket(zmq.PUSH)
         self.capture_threads = {}
 
     def startup(self):
@@ -418,7 +419,7 @@ class DeviceEvent(object):
 
     @property
     def timestamp_string(self):
-        return self.timestamp.strftime(ISO_DATE_FORMAT) # type: ignore
+        return self.timestamp.strftime(ISO_DATE_FORMAT)
 
     @property
     def event_detail(self):
@@ -692,26 +693,25 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
             log.exception('Cannot upload {} to Google Drive'.format(file_path))
 
 
-class UploadEventHandler(FileSystemEventHandler):
+class UploadEventHandler(FileSystemEventHandler, Closable):
 
     def __init__(self, fs_observer, snapshot_root):
-        super(UploadEventHandler, self).__init__()
+        FileSystemEventHandler.__init__(self)
+        Closable.__init__(self, connect_url=URL_WORKER_PUBLISHER, socket_type=zmq.PUSH)
+
         self.last_modified = None
         self.device_events = dict()
         self._snapshot_root = snapshot_root
 
         fs_observer.schedule(self, self._snapshot_root, recursive=True)
 
-        self.cloud_storage_socket = zmq_socket(zmq.PUSH) # type: ignore
+        self.cloud_storage_socket = self.get_socket(zmq.PUSH)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
         self.face_detector_socket = None
         if app_config.getboolean('snapshots', 'face_detection_enabled'):
-            self.face_detector_socket = zmq_socket(zmq.PUSH) # type: ignore
+            self.face_detector_socket = self.get_socket(zmq.PUSH)
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
-
-        self.publisher = zmq_socket(zmq.PUSH) # type: ignore
-        self.publisher.connect(URL_WORKER_PUBLISHER)
 
         self._cloud_storage_url = None
 
@@ -722,12 +722,6 @@ class UploadEventHandler(FileSystemEventHandler):
     @cloud_storage_url.setter
     def cloud_storage_url(self, cloud_storage_url):
         self._cloud_storage_url = cloud_storage_url
-
-    def close(self):
-        self.cloud_storage_socket.close()
-        self.publisher.close()
-        if self.face_detector_socket:
-            self.face_detector_socket.close()
 
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
@@ -778,10 +772,10 @@ class UploadEventHandler(FileSystemEventHandler):
                         else:
                             date_string = file_base_name
                         device_event.timestamp = date_string
-                        try:
+                        with exception_handler(closable=self, and_raise=False, close_on_exit=False):
                             # do not notify for fetched image data
                             if 'fetch' not in snapshot_path:
-                                self.publisher.send_pyobj({
+                                self.socket.send_pyobj({
                                     'active_devices': [device_event.dict],
                                     'storage_url': self._cloud_storage_url
                                 })
@@ -801,12 +795,6 @@ class UploadEventHandler(FileSystemEventHandler):
                                 snapshot_path,
                                 device_event.timestamp
                             ))
-                        except ContextTerminated:
-                            self.publisher.close()
-                            self.cloud_storage_socket.close()
-                            if self.face_detector_socket:
-                                self.face_detector_socket.close()
-                            return
                     else:
                         log.warning("Ignored unmapped path event: {}".format(snapshot_path))
                 except Exception:
@@ -863,99 +851,87 @@ class FacePuller(ZmqRelay):
         self.socket.send_pyobj(publisher_data)
 
 
-class FaceDetector(AppThread):
+class FaceDetector(ZmqRelay):
 
     def __init__(self):
-        AppThread.__init__(self, self.__class__.__name__)
+        ZmqRelay.__init__(self,
+            name=self.__class__.__name__,
+            source_zmq_url=URL_WORKER_FACE_DETECTOR,
+            source_socket_type=zmq.PULL,
+            sink_zmq_url=URL_WORKER_PUBLISHER,
+            sink_socket_type=zmq.PUSH)
 
-        self.socket = zmq_socket(zmq.PULL) # type: ignore
-        self.socket.bind(URL_WORKER_FACE_DETECTOR)
-
-        self.publisher = zmq_socket(zmq.PUSH) # type: ignore
-
-    def run(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER)
-        while True:
-            active_device = None
-            try:
-                (snapshot_path, parent_path, snapshot_timestamp, publisher_data) = self.socket.recv_pyobj()
-                if snapshot_path is not None:
-                    wait_for_file_content(snapshot_path)
-                    (parent_path, snapshot_file) = os.path.split(snapshot_path)
-                    # process file data
-                    log.debug("Loading image data from {}".format(snapshot_file))
-                    image = load_image_file(snapshot_path)
-                    log.debug("Finding faces in image file {}".format(snapshot_path))
-                elif publisher_data is not None:
-                    active_device = publisher_data['active_devices'][0]
-                    log.debug("Loading image data from {} event.".format(active_device['device_label']))
-                    if 'cv2_frame' in active_device:
-                        image = active_device['cv2_frame']
-                    else:
-                        pil_image = Image.open(BytesIO(active_device['image']))
-                        log.debug("Finding faces in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
-                        image = np.array(pil_image)
-                else:
-                    raise ValueError("No viable image data to use.")
-                # start some cooling
-                if pwm_fan_control:
-                    pwm_fan_control.start_fan()
-                # find faces using the specified model
-                faces = face_locations(
-                    image,
-                    number_of_times_to_upsample=0,
-                    model=app_config.get('snapshots', 'face_detection_model'))
-                if (len(faces) > 0):
-                    log.info("{} faces detected.".format(len(faces)))
-                else:
-                    log.debug("{} faces detected.".format(len(faces)))
-                face_num = 1
-                for face_location in faces:
-                    top, right, bottom, left = face_location
-                    log.info("Extracting face #{} at Top: {}, Left: {}, Bottom: {}, Right: {}".format(
-                        face_num,
-                        top,
-                        left,
-                        bottom,
-                        right))
-                    # extract sub-image data aligned to face
-                    face_image = image[top:bottom, left:right]
-                    pil_image = Image.fromarray(face_image)
-                    if active_device is not None:
-                        image_output = BytesIO()
-                        pil_image.save(image_output, format='JPEG')
-                        active_device['image'] = image_output.getvalue()
-                        # remove any numpy data
-                        if 'cv2_frame' in active_device:
-                            del active_device['cv2_frame']
-                        self.publisher.send_pyobj(publisher_data)
-                    # save the additional image data
-                    face_snapshot_path = create_snapshot_path(
-                        parent_path=parent_path,
-                        operation="face{}".format(face_num),
-                        unix_timestamp=snapshot_timestamp,
-                        file_extension='jpg')
-                    log.info("Saving face #{} to {}".format(face_num, face_snapshot_path))
-                    pil_image.save(face_snapshot_path)
-                    # next face
-                    face_num += 1
-            except ContextTerminated:
-                self.socket.close()
-                self.publisher.close()
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                capture_exception()
-                sleep(1)
-                continue
+    def process_message(self, zmq_socket):
+        active_device = None
+        (snapshot_path, parent_path, snapshot_timestamp, publisher_data) = self.socket.recv_pyobj()
+        if snapshot_path is not None:
+            wait_for_file_content(snapshot_path)
+            (parent_path, snapshot_file) = os.path.split(snapshot_path)
+            # process file data
+            log.debug("Loading image data from {}".format(snapshot_file))
+            image = load_image_file(snapshot_path)
+            log.debug("Finding faces in image file {}".format(snapshot_path))
+        elif publisher_data is not None:
+            active_device = publisher_data['active_devices'][0]
+            log.debug("Loading image data from {} event.".format(active_device['device_label']))
+            if 'cv2_frame' in active_device:
+                image = active_device['cv2_frame']
+            else:
+                pil_image = Image.open(BytesIO(active_device['image']))
+                log.debug("Finding faces in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
+                image = np.array(pil_image)
+        else:
+            raise ValueError("No viable image data to use.")
+        # start some cooling
+        if pwm_fan_control:
+            pwm_fan_control.start_fan()
+        # find faces using the specified model
+        faces = face_locations(
+            image,
+            number_of_times_to_upsample=0,
+            model=app_config.get('snapshots', 'face_detection_model'))
+        if (len(faces) > 0):
+            log.info("{} faces detected.".format(len(faces)))
+        else:
+            log.debug("{} faces detected.".format(len(faces)))
+        face_num = 1
+        for face_location in faces:
+            top, right, bottom, left = face_location
+            log.info("Extracting face #{} at Top: {}, Left: {}, Bottom: {}, Right: {}".format(
+                face_num,
+                top,
+                left,
+                bottom,
+                right))
+            # extract sub-image data aligned to face
+            face_image = image[top:bottom, left:right]
+            pil_image = Image.fromarray(face_image)
+            if active_device is not None:
+                image_output = BytesIO()
+                pil_image.save(image_output, format='JPEG')
+                active_device['image'] = image_output.getvalue()
+                # remove any numpy data
+                if 'cv2_frame' in active_device:
+                    del active_device['cv2_frame']
+                zmq_socket.send_pyobj(publisher_data)
+            # save the additional image data
+            face_snapshot_path = create_snapshot_path(
+                parent_path=parent_path,
+                operation="face{}".format(face_num),
+                unix_timestamp=snapshot_timestamp,
+                file_extension='jpg')
+            log.info("Saving face #{} to {}".format(face_num, face_snapshot_path))
+            pil_image.save(face_snapshot_path)
+            # next face
+            face_num += 1
 
 
-class FrameServer(AppThread):
+class FrameServer(AppThread, Closable):
 
     def __init__(self, camera_config, snapshot_timestamp, publisher_data):
         AppThread.__init__(self, self.__class__.__name__)
+        Closable.__init__(self, connect_url=URL_WORKER_FACE_DETECTOR, socket_type=zmq.PUSH)
 
-        self.detector_socket = zmq_socket(zmq.PUSH) # type: ignore
         self.capture_duration_seconds = app_config.getint('camera', 'rtsp_capture_duration_seconds')
         self.rtsp_url = 'rtsp://{}@{}/{}'.format(
             camera_config.basic_auth,
@@ -970,55 +946,49 @@ class FrameServer(AppThread):
 
     def run(self):
         global frame_server_mutex
-        self.detector_socket.connect(URL_WORKER_FACE_DETECTOR)
         frame_count = 0
         capture = None
-        try:
-            log.info('Waiting for air time with {}...'.format(self.camera_name))
-            frame_server_mutex.acquire()
-            log.info('Starting video capture from {}@{}...'.format(self.camera_name, self.camera_address))
-            #TODO: https://github.com/ageitgey/face_recognition/issues/659#issuecomment-468008178
-            capture = cv2.VideoCapture(self.rtsp_url) # type: ignore
-            log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_name, self.camera_address, self.capture_duration_seconds))
-            start_time = time.time()
-            #TODO: adjust based on time for first frame
-            while capture and capture.isOpened() and time.time() - start_time <= self.capture_duration_seconds:
-                ret, frame = capture.read()
-                if not ret:
-                    log.warn('No more frames from {}@{} after {} frames.'.format(self.camera_name, self.camera_address, frame_count))
-                    break
-                if frame is None:
+        with exception_handler(closable=self):
+            try:
+                log.info('Waiting for air time with {}...'.format(self.camera_name))
+                frame_server_mutex.acquire()
+                log.info('Starting video capture from {}@{}...'.format(self.camera_name, self.camera_address))
+                #TODO: https://github.com/ageitgey/face_recognition/issues/659#issuecomment-468008178
+                capture = cv2.VideoCapture(self.rtsp_url)
+                log.info('Fetching frames from {}@{} for {} seconds.'.format(self.camera_name, self.camera_address, self.capture_duration_seconds))
+                start_time = time.time()
+                #TODO: adjust based on time for first frame
+                while capture and capture.isOpened() and time.time() - start_time <= self.capture_duration_seconds:
+                    ret, frame = capture.read()
+                    if not ret:
+                        log.warn('No more frames from {}@{} after {} frames.'.format(self.camera_name, self.camera_address, frame_count))
+                        break
+                    if frame is None:
+                        sleep(0.01)
+                        continue
+                    frame_count += 1
+                    active_device = self.publisher_data['active_devices'][0]
+                    active_device['cv2_frame'] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    self.socket.send_pyobj((
+                        None,
+                        self.parent_path,
+                        self.snapshot_timestamp,
+                        self.publisher_data
+                    ))
+                    # do not consume faster than this rate
                     sleep(0.01)
-                    continue
-                frame_count += 1
-                active_device = self.publisher_data['active_devices'][0]
-                active_device['cv2_frame'] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) # type: ignore
-                self.detector_socket.send_pyobj((
-                    None,
-                    self.parent_path,
-                    self.snapshot_timestamp,
-                    self.publisher_data
-                ))
-                # do not consume faster than this rate
-                sleep(0.01)
-                #FIXME: take only a few frames for test
-                if frame_count >= 10:
-                    break
-        except ContextTerminated:
-            self.detector_socket.close()
-        except Exception:
-            log.exception(self.__class__.__name__)
-            capture_exception()
-        finally:
-            if capture:
-                capture.release()
-            frame_server_mutex.release()
-            self.detector_socket.close()
-        log.info('Read {} frames from {}@{} in {}s.'.format(
-            frame_count,
-            self.camera_name,
-            self.camera_address,
-            time.time() - start_time))
+                    #FIXME: take only a few frames for test
+                    if frame_count >= 10:
+                        break
+            finally:
+                if capture:
+                    capture.release()
+                frame_server_mutex.release()
+            log.info('Read {} frames from {}@{} in {}s.'.format(
+                frame_count,
+                self.camera_name,
+                self.camera_address,
+                time.time() - start_time))
 
 
 class PwmFanControl(AppThread):
@@ -1093,7 +1063,7 @@ if __name__ == "__main__":
     if os.path.exists(os.path.join(pwm_device_path_prefix, 'target_pwm')):
         pwm_fan_control = PwmFanControl(pwm_device_path_prefix)
     # connect to SWF
-    swf_activity = SnapshotActivity(URL_WORKER_APP) # type: ignore
+    swf_activity = SnapshotActivity(URL_WORKER_APP)
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
                                             swf_region,
                                             swf_domain,
