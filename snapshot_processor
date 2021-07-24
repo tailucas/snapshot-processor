@@ -85,12 +85,11 @@ from lib import app_config, \
     device_name, \
     device_name_base, \
     log, \
-    ISO_DATE_FORMAT, \
     URL_WORKER_APP, \
     URL_WORKER_PUBLISHER
 
 from lib.bluetooth import bluetooth_init, ping_bluetooth_devices
-from lib.datetime import is_list, make_timestamp, parse_datetime
+from lib.datetime import is_list, make_timestamp, parse_datetime, ISO_DATE_FORMAT
 from lib.data import make_payload
 from lib.aws import boto_session, \
     swf_region, \
