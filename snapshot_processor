@@ -636,7 +636,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
 class GoogleDriveUploader(AppThread, GoogleDriveManager):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
-        AppThread.__init__(self, name = self.__class__.__name__)
+        AppThread.__init__(self, name=self.__class__.__name__)
         GoogleDriveManager.__init__(self,
             gauth_creds_file=gauth_creds_file,
             gdrive_folder=gdrive_folder)
@@ -1226,10 +1226,6 @@ if __name__ == "__main__":
     threads.threads_tracked.add(observer.getName())
     # must be main thread
     signal_handler = SignalHandler()
-    # start the nanny
-    f = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
-    f.setDaemon(True)
-    f.start()
     publisher_socket = zmq_socket(zmq.PUSH)
     try:
         # startup completed
@@ -1243,6 +1239,11 @@ if __name__ == "__main__":
         google_drive_uploader.start()
         # start the Google Driver archiver last
         google_drive_archiver.start()
+        # start thread nanny
+        nanny = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
+        nanny.setDaemon(True)
+        nanny.start()
+        # start heartbeat loop
         publisher_socket.connect(URL_WORKER_PUBLISHER)
         while not threads.shutting_down:
             publisher_socket.send_pyobj({
