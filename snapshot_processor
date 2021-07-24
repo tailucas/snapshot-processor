@@ -1156,7 +1156,7 @@ if __name__ == "__main__":
     pub_ip=app_config.get('app', 'eth0_ip')
     pub_port=app_config.get('zmq', 'pubsub_port')
     publisher = ZmqRelay(
-        name='heartbeat',
+        name='interplexing-beacon',
         source_zmq_url=URL_WORKER_PUBLISHER,
         source_socket_type=zmq.PULL,
         sink_zmq_url=f'tcp://{pub_ip}:{pub_port}',
@@ -1172,6 +1172,7 @@ if __name__ == "__main__":
     puller.start()
     # start the collectors
     observer.start()
+    # track external thread explicitly
     threads.threads_tracked.add(observer.getName())
     # must be main thread
     signal_handler = SignalHandler()
