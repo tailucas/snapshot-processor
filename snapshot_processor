@@ -85,6 +85,7 @@ from lib import app_config, \
     device_name, \
     device_name_base, \
     log, \
+    URL_WORKER_APP, \
     URL_WORKER_PUBLISHER
 
 from lib.bluetooth import bluetooth_init, ping_bluetooth_devices
@@ -257,140 +258,130 @@ class FileType(object):
 filetype = None
 
 
-class Snapshot(AppThread):
+class Snapshot(ZmqRelay):
 
     def __init__(self, camera_profiles, cloud_storage_url):
-        AppThread.__init__(self, name=self.__class__.__name__)
+        ZmqRelay.__init__(self,
+            name=self.__class__.__name__,
+            source_zmq_url=URL_WORKER_APP,
+            source_socket_type=zmq.PULL,
+            sink_zmq_url=URL_WORKER_PUBLISHER,
+            sink_socket_type=zmq.PUSH)
 
         self.cameras = camera_profiles
         self.default_command = app_config.get('camera', 'default_command')
         self.default_image_format = app_config.get('camera', 'default_image_format')
 
         self.cloud_storage_url = cloud_storage_url
-        self.socket = zmq_socket(zmq.PULL) # type: ignore
-        self.socket.bind(URL_WORKER_APP) # type: ignore
 
-        self.publisher = zmq_socket(zmq.PUSH) # type: ignore
         self.face_detector_socket = None
         if app_config.getboolean('snapshots', 'face_detection_enabled'):
-            self.face_detector_socket = zmq_socket(zmq.PUSH) # type: ignore
+            self.face_detector_socket = self.get_socket(zmq.PUSH) # type: ignore
         self.capture_threads = {}
 
-    def run(self):
-        self.publisher.connect(URL_WORKER_PUBLISHER)
+    def startup(self):
         if self.face_detector_socket:
             self.face_detector_socket.connect(URL_WORKER_FACE_DETECTOR)
-        while True:
+
+    def process_message(self, zmq_socket):
+        output_trigger = zmq_socket.recv_pyobj()
+        # FIXME: remove block
+        if isinstance(output_trigger, dict):
+            timestamp = output_trigger['timestamp']
+            device_key = output_trigger['device_key']
+            device_label = output_trigger['device_label']
+            if 'device_params' in output_trigger:
+                camera_config_string = output_trigger['device_params']
+        elif isinstance(output_trigger, tuple):
+            #FIXME
+            if len(output_trigger) > 3:
+                log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
+                return
+            timestamp = make_timestamp()
+            device_key, device_label, camera_config_string = output_trigger
+        else:
+            log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
+            return
+        if device_key not in self.cameras:
+            log.error("Camera configuration missing for '{}.'".format(device_label))
+            post_count_metric('Errors')
+            return
+        try:
+            camera_config = CameraConfig(
+                device_key=device_key,
+                device_label=device_label,
+                camera_config=camera_config_string,
+                camera_storage=self.cameras[device_key]['storage'])
+        except AssertionError:
+            post_count_metric('Errors')
+            return
+        image_data = None
+        # grab a first frame for overall context
+        for tries in range(1, 4):
             try:
-                output_trigger = self.socket.recv_pyobj()
-                # FIXME: remove block
-                if isinstance(output_trigger, dict):
-                    timestamp = output_trigger['timestamp']
-                    device_key = output_trigger['device_key']
-                    device_label = output_trigger['device_label']
-                    if 'device_params' in output_trigger:
-                        camera_config_string = output_trigger['device_params']
-                elif isinstance(output_trigger, tuple):
-                    #FIXME
-                    if len(output_trigger) > 3:
-                        log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
-                        continue
-                    timestamp = make_timestamp()
-                    device_key, device_label, camera_config_string = output_trigger
-                else:
-                    log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
-                    continue
-                if device_key not in self.cameras:
-                    log.error("Camera configuration missing for '{}.'".format(device_label))
-                    post_count_metric('Errors')
-                    continue
-                try:
-                    camera_config = CameraConfig(
-                        device_key=device_key,
-                        device_label=device_label,
-                        camera_config=camera_config_string,
-                        camera_storage=self.cameras[device_key]['storage'])
-                except AssertionError:
-                    post_count_metric('Errors')
-                    continue
-                image_data = None
-                # grab a first frame for overall context
-                for tries in range(1, 4):
-                    try:
-                        r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_config.url), params={
-                            'cmd': self.default_command,
-                            'usr': camera_config.username,
-                            'pwd': camera_config.password,
-                        })
-                        image_data = r.content
-                        im = Image.open(BytesIO(image_data))
-                        break
-                    except (OSError, ConnectionError, RequestException) as e:
-                        log.warning("Problem getting image from {}. Retrying...".format(camera_config),
-                                    exc_info=1)
-                        sleep(0.1)
-                        if tries >= 3:
-                            log.error("Giving up getting image from {} after {} tries: {}".format(
-                                camera_config,
-                                tries,
-                                repr(e)))
-                            post_count_metric('Errors')
-                            break
-                # construct message to publish
-                unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
-                log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
-                # publisher data
-                publisher_data = create_publisher_struct(
-                    device_key=device_key,
-                    device_label=device_label,
-                    image_data=image_data,
-                    storage_url=self.cloud_storage_url)
-                # look for faces in a continuous stream
-                if app_config.getboolean('camera', 'rtsp_capture_enabled'):
-                    capture_thread = None
-                    if device_key in self.capture_threads:
-                        capture_thread = self.capture_threads[device_key]
-                    if capture_thread and capture_thread.is_alive():
-                        log.info('Not starting additional capture thread for {} which is still alive.'.format(device_key))
-                    else:
-                        capture_thread = FrameServer(
-                            camera_config=camera_config,
-                            snapshot_timestamp=unix_timestamp,
-                            publisher_data=publisher_data)
-                        # replace the existing thread
-                        self.capture_threads[device_key] = capture_thread
-                        # start the thread
-                        capture_thread.start()
-                elif self.face_detector_socket:
-                    # send image data for processing
-                    self.face_detector_socket.send_pyobj((
-                        None,
-                        camera_config.camera_storage,
-                        unix_timestamp,
-                        publisher_data
-                    ))
-                # publish event data
-                self.publisher.send_pyobj(publisher_data)
-                # create output file path
-                output_filename = create_snapshot_path(
-                    parent_path=camera_config.camera_storage,
-                    operation='fetch',
-                    unix_timestamp=unix_timestamp,
-                    file_extension=self.default_image_format)
-                log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
-                # persist for Cloud
-                im.save(output_filename)
-            except ContextTerminated:
-                self.socket.close()
-                self.publisher.close()
-                if self.face_detector_socket:
-                    self.face_detector_socket.close()
+                r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_config.url), params={
+                    'cmd': self.default_command,
+                    'usr': camera_config.username,
+                    'pwd': camera_config.password,
+                })
+                image_data = r.content
+                im = Image.open(BytesIO(image_data))
                 break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                capture_exception()
-                sleep(1)
-                continue
+            except (OSError, ConnectionError, RequestException) as e:
+                log.warning("Problem getting image from {}. Retrying...".format(camera_config),
+                            exc_info=1)
+                sleep(0.1)
+                if tries >= 3:
+                    log.error("Giving up getting image from {} after {} tries: {}".format(
+                        camera_config,
+                        tries,
+                        repr(e)))
+                    post_count_metric('Errors')
+                    break
+        # construct message to publish
+        unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
+        log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
+        # publisher data
+        publisher_data = create_publisher_struct(
+            device_key=device_key,
+            device_label=device_label,
+            image_data=image_data,
+            storage_url=self.cloud_storage_url)
+        # look for faces in a continuous stream
+        if app_config.getboolean('camera', 'rtsp_capture_enabled'):
+            capture_thread = None
+            if device_key in self.capture_threads:
+                capture_thread = self.capture_threads[device_key]
+            if capture_thread and capture_thread.is_alive():
+                log.info('Not starting additional capture thread for {} which is still alive.'.format(device_key))
+            else:
+                capture_thread = FrameServer(
+                    camera_config=camera_config,
+                    snapshot_timestamp=unix_timestamp,
+                    publisher_data=publisher_data)
+                # replace the existing thread
+                self.capture_threads[device_key] = capture_thread
+                # start the thread
+                capture_thread.start()
+        elif self.face_detector_socket:
+            # send image data for processing
+            self.face_detector_socket.send_pyobj((
+                None,
+                camera_config.camera_storage,
+                unix_timestamp,
+                publisher_data
+            ))
+        # publish event data
+        self.socket.send_pyobj(publisher_data)
+        # create output file path
+        output_filename = create_snapshot_path(
+            parent_path=camera_config.camera_storage,
+            operation='fetch',
+            unix_timestamp=unix_timestamp,
+            file_extension=self.default_image_format)
+        log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
+        # persist for Cloud
+        im.save(output_filename)
 
 
 class DeviceEvent(object):
@@ -633,35 +624,25 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
         return False
 
 
-class GoogleDriveUploader(AppThread, GoogleDriveManager):
+class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
         AppThread.__init__(self, name=self.__class__.__name__)
+        Closable.__init__(self, connect_url=URL_WORKER_CLOUD_STORAGE, socket_type=zmq.PULL)
         GoogleDriveManager.__init__(self,
             gauth_creds_file=gauth_creds_file,
             gdrive_folder=gdrive_folder)
-
-        self.socket = zmq_socket(zmq.PULL) # type: ignore
-        self.socket.bind(URL_WORKER_CLOUD_STORAGE)
 
         # determine the Drive folder details synchronously
         self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
 
     def run(self):
-        while True:
-            try:
+        with exception_handler(closable=self):
+            while not threads.shutting_down:
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
                 #FIXME: remove
                 wait_for_file_content(snapshot_path)
                 self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
-            except ContextTerminated:
-                self.socket.close()
-                break
-            except Exception:
-                log.exception(self.__class__.__name__)
-                capture_exception()
-                sleep(1)
-                continue
 
     def upload(self, file_path, created_time=None):
         # upload the snapshot
@@ -838,6 +819,7 @@ class FacePuller(ZmqRelay):
 
     def __init__(self, camera_profiles, cloud_storage_url, source_zmq_url):
         ZmqRelay.__init__(self,
+            name=self.__class__.__name__,
             source_zmq_url=source_zmq_url,
             source_socket_type=zmq.PULL,
             sink_zmq_url=URL_WORKER_PUBLISHER,
@@ -1085,7 +1067,7 @@ class PwmFanControl(AppThread):
         pwm_value, summary = self.read_fan_state(detail=True)
         log.info(summary)
         while not threads.shutting_down:
-            try:
+            with exception_handler():
                 # read the fan value and only tick down if it is above 0
                 pwm_value, _ = self.read_fan_state()
                 if pwm_value > 0:
@@ -1099,11 +1081,6 @@ class PwmFanControl(AppThread):
                     sleep(1)
                     continue
                 threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
-            except Exception:
-                log.exception(self.name)
-                capture_exception()
-                sleep(1)
-                continue
         # stop the fan for shutdown
         self.stop_fan()
         pwm_value, summary = self.read_fan_state(detail=True)
@@ -1208,6 +1185,7 @@ if __name__ == "__main__":
     pub_ip=app_config.get('app', 'eth0_ip')
     pub_port=app_config.get('zmq', 'pubsub_port')
     publisher = ZmqRelay(
+        name='heartbeat',
         source_zmq_url=URL_WORKER_PUBLISHER,
         source_socket_type=zmq.PULL,
         sink_zmq_url=f'tcp://{pub_ip}:{pub_port}',
