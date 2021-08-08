@@ -1215,7 +1215,6 @@ if __name__ == "__main__":
         upload_event_handler.close()
         # since this thread and the signal handler are one and the same
         publisher_socket.close()
+    finally:
         zmq_term()
-        log.info(message.format('SWF worker'))
-        swf_worker.join()
-        log.info('Shutdown complete.')
+    log.info('Shutdown complete.')
