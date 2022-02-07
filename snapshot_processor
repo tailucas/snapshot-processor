@@ -6,10 +6,10 @@ import logging.handlers
 import boto3
 import builtins
 import copy
-import cv2
-import face_recognition
+#import cv2
+#import face_recognition
 import netifaces
-import numpy as np
+#import numpy as np
 import os
 import pytz
 import requests
@@ -26,7 +26,7 @@ from configparser import ConfigParser
 from abc import abstractmethod, ABCMeta
 from datetime import datetime, timedelta
 from dateutil import tz
-from face_recognition import face_locations, load_image_file
+#from face_recognition import face_locations, load_image_file
 from http.client import BadStatusLine
 from io import BytesIO
 from mimetypes import MimeTypes
@@ -1163,13 +1163,14 @@ if __name__ == "__main__":
         sink_socket_type=zmq.PUB)
     publisher.start()
     # start external PULL socket
-    push_ip=app_config.get('app', 'eth0_ip')
-    push_port=app_config.get('zmq', 'pushpull_port')
-    puller = FacePuller(
-        camera_profiles=camera_profiles,
-        cloud_storage_url=google_drive_uploader.cloud_storage_url,
-        source_zmq_url=f'tcp://{push_ip}:{push_port}')
-    puller.start()
+    if app_config.getboolean('snapshots', 'face_pulling_enabled'):
+        push_ip=app_config.get('app', 'eth0_ip')
+        push_port=app_config.get('zmq', 'pushpull_port')
+        puller = FacePuller(
+            camera_profiles=camera_profiles,
+            cloud_storage_url=google_drive_uploader.cloud_storage_url,
+            source_zmq_url=f'tcp://{push_ip}:{push_port}')
+        puller.start()
     # start the collectors
     observer.start()
     # track external thread explicitly
