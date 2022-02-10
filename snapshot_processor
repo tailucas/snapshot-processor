@@ -6,11 +6,13 @@ import logging.handlers
 import boto3
 import builtins
 import copy
+import json
 #import cv2
 #import face_recognition
 import netifaces
 #import numpy as np
 import os
+import pika
 import pytz
 import requests
 import sentry_sdk
@@ -1063,6 +1065,14 @@ if __name__ == "__main__":
     pwm_device_path_prefix = '/sys/devices/pwm-fan'
     if os.path.exists(os.path.join(pwm_device_path_prefix, 'target_pwm')):
         pwm_fan_control = PwmFanControl(pwm_device_path_prefix)
+    # connect to RabbitMQ
+    mq_config_server = app_config.get('rabbitmq', 'server_address')
+    mq_connection = pika.BlockingConnection(pika.ConnectionParameters(host=mq_config_server))
+    mq_channel = mq_connection.channel()
+    mq_config_exchange = app_config.get('rabbitmq', 'mq_exchange')
+    mq_exchange_type = 'topic'
+    mq_channel.exchange_declare(exchange=mq_config_exchange, exchange_type=mq_exchange_type)
+    log.info(f'Using RabbitMQ server at {mq_config_server} using {mq_exchange_type} exchange {mq_config_exchange}.')
     # connect to SWF
     swf_activity = SnapshotActivity(URL_WORKER_APP)
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
@@ -1197,10 +1207,17 @@ if __name__ == "__main__":
         # start heartbeat loop
         publisher_socket.connect(URL_WORKER_PUBLISHER)
         while not threads.shutting_down:
-            publisher_socket.send_pyobj({
+            heartbeat_payload = {
                 #TODO statistics
                 'device_info': device_info
-            })
+            }
+            publisher_socket.send_pyobj(heartbeat_payload)
+            mq_channel.basic_publish(
+                exchange=mq_config_exchange,
+                routing_key=f'heartbeat.{app_name}',
+                body=json.dumps(make_payload(
+                    data=heartbeat_payload,
+                    msgpack=False)))
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
@@ -1208,6 +1225,8 @@ if __name__ == "__main__":
         threads.shutting_down = True
         threads.interruptable_sleep.set()
         message = "Shutting down {}..."
+        log.info(message.format('RabbitMQ worker'))
+        mq_connection.close()
         log.info(message.format('SWF activity worker'))
         swf_worker.stop()
         log.info(message.format('Application threads'))
