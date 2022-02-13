@@ -959,7 +959,7 @@ if __name__ == "__main__":
             #publisher_socket.send_pyobj(heartbeat_payload)
             mq_channel.basic_publish(
                 exchange=mq_config_exchange,
-                routing_key=f'heartbeat.{app_name}',
+                routing_key=f'heartbeat.{mq_device_topic}',
                 body=make_payload(data=heartbeat_payload))
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
