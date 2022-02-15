@@ -3,6 +3,7 @@ import dateutil.parser
 import logging
 import logging.handlers
 
+import boto3
 import builtins
 import copy
 import os
@@ -791,22 +792,34 @@ class ObjectDetector(ZmqRelay):
             sink_zmq_url=URL_WORKER_PUBLISHER,
             sink_socket_type=zmq.PUSH)
 
+        self._rekog = None
+
+    def startup(self):
+        self._rekog = boto3.client('rekognition', region_name=app_config.get('rekognition', 'region'))
+
     def process_message(self, zmq_socket):
         active_device = None
         (snapshot_path, parent_path, snapshot_timestamp, publisher_data) = self.socket.recv_pyobj()
+        image_bytes = None
         if snapshot_path is not None:
             wait_for_file_content(snapshot_path)
-            (parent_path, snapshot_file) = os.path.split(snapshot_path)
+            _, snapshot_file = os.path.split(snapshot_path)
             # process file data
             log.debug("Loading image data from {}".format(snapshot_file))
-            # TODO
+            with open(snapshot_path, 'rb') as img_file:
+                image_bytes = img_file.read()
         elif publisher_data is not None:
             active_device = publisher_data['active_devices'][0]
+            image_bytes = active_device['image']
             log.debug("Loading image data from {} event.".format(active_device['device_label']))
-            # TODO
+            pil_image = Image.open(BytesIO(active_device['image']))
+            log.debug("Finding objects in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
         else:
             raise ValueError("No viable image data to use.")
         # find objects using the specified model
+        image_data = {'Bytes': image_bytes}
+        response = self._rekog.detect_labels(Image=image_data)
+        log.info(f'Rekognition response: {response!s}')
         # TODO
 
 
