@@ -6,6 +6,7 @@ import logging.handlers
 import boto3
 import builtins
 import copy
+import json
 import os
 import pika
 import pytz
@@ -92,6 +93,7 @@ from lib.app import ZmqRelay, AppThread
 from lib.zmq import zmq_socket, zmq_term, Closable
 from lib.handler import exception_handler
 
+URL_WORKER_RABBIT_PUBLISHER = 'inproc://rabbitmq-publisher'
 URL_WORKER_OBJECT_DETECTOR = 'inproc://object-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 
@@ -139,6 +141,45 @@ def create_publisher_struct(device_key, device_label, image_data, storage_url):
         ],
         'storage_url': storage_url
     }
+
+
+class RabbitMQRelay(AppThread):
+
+    def __init__(self):
+        AppThread.__init__(self, name=self.__class__.__name__)
+        self._source_zmq_url = URL_WORKER_RABBIT_PUBLISHER
+        self._source_socket_type = zmq.PULL
+
+        self._mq_config_server = app_config.get('rabbitmq', 'server_address')
+        self._mq_connection = pika.BlockingConnection(pika.ConnectionParameters(host=self._mq_config_server))
+        self._mq_channel = self._mq_connection.channel()
+        self._mq_config_exchange = app_config.get('rabbitmq', 'mq_exchange')
+        self._mq_exchange_type = 'topic'
+        self._mq_channel.exchange_declare(exchange=self._mq_config_exchange, exchange_type=self._mq_exchange_type)
+        self._mq_device_topic = app_config.get('rabbitmq', 'device_topic')
+
+    @property
+    def device_topic(self):
+        return self._mq_device_topic
+
+    def close(self):
+        self._mq_connection.close()
+
+    def process_message(self, zmq_socket):
+        event_topic, event_payload = zmq_socket.recv_pyobj()
+        self._mq_channel.basic_publish(
+            exchange=self._mq_config_exchange,
+            routing_key=event_topic,
+            body=make_payload(data=event_payload))
+
+    def startup(self):
+        log.info(f'Using RabbitMQ server at {self._mq_config_server} with {self._mq_exchange_type} ({self._mq_device_topic}) exchange {self._mq_config_exchange}.')
+
+    def run(self):
+        self.startup()
+        with exception_handler(connect_url=self._source_zmq_url, socket_type=self._source_socket_type) as zmq_socket:
+            while not threads.shutting_down:
+                self.process_message(zmq_socket=zmq_socket)
 
 
 class CameraConfig(object):
@@ -239,12 +280,12 @@ filetype = None
 
 class Snapshot(ZmqRelay):
 
-    def __init__(self, camera_profiles, cloud_storage_url, mq_channel, mq_config_exchange, mq_device_topic):
+    def __init__(self, camera_profiles, cloud_storage_url, mq_device_topic):
         ZmqRelay.__init__(self,
             name=self.__class__.__name__,
             source_zmq_url=URL_WORKER_APP,
             source_socket_type=zmq.PULL,
-            sink_zmq_url=URL_WORKER_PUBLISHER,
+            sink_zmq_url=URL_WORKER_OBJECT_DETECTOR,
             sink_socket_type=zmq.PUSH)
 
         self.cameras = camera_profiles
@@ -253,18 +294,8 @@ class Snapshot(ZmqRelay):
 
         self.cloud_storage_url = cloud_storage_url
 
-        self.object_detector_socket = None
-        if app_config.getboolean('snapshots', 'object_detection_enabled'):
-            self.object_detector_socket = self.get_socket(zmq.PUSH)
         self.capture_threads = {}
-
-        self._mq_channel = mq_channel
-        self._mq_config_exchange = mq_config_exchange
         self._mq_device_topic = mq_device_topic
-
-    def startup(self):
-        if self.object_detector_socket:
-            self.object_detector_socket.connect(URL_WORKER_OBJECT_DETECTOR)
 
     def process_message(self, zmq_socket):
         output_trigger = zmq_socket.recv_pyobj()
@@ -330,20 +361,12 @@ class Snapshot(ZmqRelay):
             device_label=device_label,
             image_data=image_data,
             storage_url=self.cloud_storage_url)
-        if self.object_detector_socket:
-            # send image data for processing
-            self.object_detector_socket.send_pyobj((
-                None,
-                camera_config.camera_storage,
-                unix_timestamp,
-                publisher_data
-            ))
-        # publish event data
-        #self.socket.send_pyobj(publisher_data)
-        self._mq_channel.basic_publish(
-            exchange=self._mq_config_exchange,
-            routing_key=f'event.{self._mq_device_topic}.{device_name}.image',
-            body=make_payload(data=publisher_data))
+        # send image data for processing
+        self.socket.send_pyobj((
+            None,
+            f'event.{self._mq_device_topic}.{device_name}.image',
+            publisher_data
+        ))
         # create output file path
         output_filename = create_snapshot_path(
             parent_path=camera_config.camera_storage,
@@ -665,9 +688,9 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
 
 class UploadEventHandler(FileSystemEventHandler, Closable):
 
-    def __init__(self, fs_observer, snapshot_root, mq_channel, mq_config_exchange, mq_device_topic):
+    def __init__(self, fs_observer, snapshot_root, mq_device_topic):
         FileSystemEventHandler.__init__(self)
-        Closable.__init__(self, connect_url=URL_WORKER_PUBLISHER, socket_type=zmq.PUSH)
+        Closable.__init__(self, connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH)
 
         self.last_modified = None
         self.device_events = dict()
@@ -678,15 +701,8 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         self.cloud_storage_socket = self.get_socket(zmq.PUSH)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
 
-        self.object_detector_socket = None
-        if app_config.getboolean('snapshots', 'object_detection_enabled'):
-            self.object_detector_socket = self.get_socket(zmq.PUSH)
-            self.object_detector_socket.connect(URL_WORKER_OBJECT_DETECTOR)
-
         self._cloud_storage_url = None
 
-        self._mq_channel = mq_channel
-        self._mq_config_exchange = mq_config_exchange
         self._mq_device_topic = mq_device_topic
 
     @property
@@ -753,22 +769,13 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                                     'active_devices': [device_event.dict],
                                     'storage_url': self._cloud_storage_url
                                 }
-                                #self.socket.send_pyobj(event_payload)
-                                self._mq_channel.basic_publish(
-                                    exchange=self._mq_config_exchange,
-                                    routing_key=f'event.{self._mq_device_topic}.{device_name}',
-                                    body=make_payload(data=event_payload))
-                                if self.object_detector_socket:
-                                    # start processing the image data
-                                    if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
-                                        self.object_detector_socket.send_pyobj((
-                                            snapshot_path,
-                                            # no parent path, extracted from snapshot_path
-                                            None,
-                                            device_event.timestamp,
-                                            # no image data
-                                            None
-                                        ))
+                                # start processing the image data
+                                if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
+                                    self.socket.send_pyobj((
+                                        snapshot_path,
+                                        f'event.{self._mq_device_topic}.{device_name}',
+                                        event_payload
+                                    ))
                             # upload the image snapshot to Cloud
                             self.cloud_storage_socket.send_pyobj((
                                 snapshot_path,
@@ -789,50 +796,57 @@ class ObjectDetector(ZmqRelay):
             name=self.__class__.__name__,
             source_zmq_url=URL_WORKER_OBJECT_DETECTOR,
             source_socket_type=zmq.PULL,
-            sink_zmq_url=URL_WORKER_PUBLISHER,
+            sink_zmq_url=URL_WORKER_RABBIT_PUBLISHER,
             sink_socket_type=zmq.PUSH)
 
+        self._rekog_enabled = app_config.getboolean('snapshots', 'object_detection_enabled')
         self._rekog = None
 
     def startup(self):
         self._rekog = boto3.client('rekognition', region_name=app_config.get('rekognition', 'region'))
 
     def process_message(self, zmq_socket):
-        active_device = None
-        (snapshot_path, parent_path, snapshot_timestamp, publisher_data) = self.socket.recv_pyobj()
+        (snapshot_path, publisher_topic, publisher_data) = zmq_socket.recv_pyobj()
+        active_device = publisher_data['active_devices'][0]
+        device_label = active_device['device_label']
         image_bytes = None
-        if snapshot_path is not None:
+        image_source = None
+        if 'image' in active_device:
+            image_bytes = active_device['image']
+            image_source = 'fetch'
+        elif snapshot_path is not None:
             wait_for_file_content(snapshot_path)
-            _, snapshot_file = os.path.split(snapshot_path)
-            # process file data
-            log.debug("Loading image data from {}".format(snapshot_file))
             with open(snapshot_path, 'rb') as img_file:
                 image_bytes = img_file.read()
-        elif publisher_data is not None:
-            active_device = publisher_data['active_devices'][0]
-            image_bytes = active_device['image']
-            log.debug("Loading image data from {} event.".format(active_device['device_label']))
-            pil_image = Image.open(BytesIO(active_device['image']))
-            log.debug("Finding objects in image {} {} {}...".format(pil_image.format, pil_image.size, pil_image.mode))
+            image_source = 'upload'
         else:
             raise ValueError("No viable image data to use.")
         # find objects using the specified model
-        image_data = {'Bytes': image_bytes}
-        response = self._rekog.detect_labels(Image=image_data)
-        log.info(f'Rekognition response: {response!s}')
-        # TODO
+        event_detail = None
+        if self._rekog_enabled:
+            response = self._rekog.detect_labels(Image={'Bytes': image_bytes})
+            log.debug(f'Rekognition response to {device_label} ({image_source}): {json.dumps(response)}')
+            # find Person labels
+            person_count = 0
+            if 'Labels' in response:
+                for detect_dict in response['Labels']:
+                    if detect_dict['Name'] == 'Person':
+                        # if instances are provided, sum them
+                        num_instances = len(detect_dict['Instances'])
+                        if num_instances > 0:
+                            person_count += num_instances
+                        else:
+                            person_count += 1
+                        # early exit
+                        break
+            if person_count > 0:
+                event_detail = f'{device_label} ({image_source}): {person_count} people detected.'
+                log.info(event_detail)
+                active_device['event_detail'] = event_detail
+        self.socket.send_pyobj((publisher_topic, publisher_data))
 
 
 if __name__ == "__main__":
-    # connect to RabbitMQ
-    mq_config_server = app_config.get('rabbitmq', 'server_address')
-    mq_connection = pika.BlockingConnection(pika.ConnectionParameters(host=mq_config_server))
-    mq_channel = mq_connection.channel()
-    mq_config_exchange = app_config.get('rabbitmq', 'mq_exchange')
-    mq_exchange_type = 'topic'
-    mq_channel.exchange_declare(exchange=mq_config_exchange, exchange_type=mq_exchange_type)
-    mq_device_topic = app_config.get('rabbitmq', 'device_topic')
-    log.info(f'Using RabbitMQ server at {mq_config_server} with {mq_exchange_type} ({mq_device_topic}) exchange {mq_config_exchange}.')
     # connect to SWF
     swf_activity = SnapshotActivity(URL_WORKER_APP)
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
@@ -842,6 +856,8 @@ if __name__ == "__main__":
                                             swf_activity, DeviceInfoActivity()))
     swf_worker._worker.unhandled_exception_handler = swf_exception_handler
     swf_worker.start()
+    # RabbitMQ relay
+    mq_relay = RabbitMQRelay()
     # file system listener
     observer = Observer()
     observer.name = observer.__class__.__name__
@@ -849,9 +865,7 @@ if __name__ == "__main__":
     upload_event_handler = UploadEventHandler(
         snapshot_root=snapshot_root,
         fs_observer=observer,
-        mq_channel=mq_channel,
-        mq_config_exchange=mq_config_exchange,
-        mq_device_topic=mq_device_topic)
+        mq_device_topic=mq_relay.device_topic)
     # construct the device representation
     input_types = dict(app_config.items('input_type'))
     input_locations = dict(app_config.items('input_location'))
@@ -926,10 +940,9 @@ if __name__ == "__main__":
     snapshotter = Snapshot(
         camera_profiles=camera_profiles,
         cloud_storage_url=google_drive_uploader.cloud_storage_url,
-        mq_channel=mq_channel,
-        mq_config_exchange=mq_config_exchange,
-        mq_device_topic=mq_device_topic)
+        mq_device_topic=mq_relay.device_topic)
     # start threads
+    mq_relay.start()
     snapshotter.start()
     # ZMQ endpoints
     pub_ip=app_config.get('app', 'eth0_ip')
@@ -963,17 +976,13 @@ if __name__ == "__main__":
         nanny.setDaemon(True)
         nanny.start()
         # start heartbeat loop
-        publisher_socket.connect(URL_WORKER_PUBLISHER)
+        publisher_socket.connect(URL_WORKER_RABBIT_PUBLISHER)
         while not threads.shutting_down:
             heartbeat_payload = {
                 #TODO statistics
                 'device_info': device_info
             }
-            #publisher_socket.send_pyobj(heartbeat_payload)
-            mq_channel.basic_publish(
-                exchange=mq_config_exchange,
-                routing_key=f'heartbeat.{mq_device_topic}',
-                body=make_payload(data=heartbeat_payload))
+            publisher_socket.send_pyobj((f'heartbeat.{mq_relay.device_topic}', heartbeat_payload))
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
@@ -981,8 +990,8 @@ if __name__ == "__main__":
         threads.shutting_down = True
         threads.interruptable_sleep.set()
         message = "Shutting down {}..."
-        log.info(message.format('RabbitMQ worker'))
-        mq_connection.close()
+        log.info(message.format('RabbitMQ relay'))
+        mq_relay.close()
         log.info(message.format('SWF activity worker'))
         swf_worker.stop()
         log.info(message.format('Application threads'))
