@@ -828,21 +828,25 @@ class ObjectDetector(ZmqRelay):
             log.debug(f'Rekognition response to {device_label} ({image_source}): {json.dumps(response)}')
             # find Person labels
             person_count = 0
+            labels = list()
             if 'Labels' in response:
                 for detect_dict in response['Labels']:
-                    if detect_dict['Name'] == 'Person':
+                    label_name = detect_dict['Name']
+                    label_confidence = detect_dict['Confidence']
+                    labels.append((label_name, label_confidence))
+                    if label_name == 'Person':
                         # if instances are provided, sum them
                         num_instances = len(detect_dict['Instances'])
                         if num_instances > 0:
                             person_count += num_instances
                         else:
                             person_count += 1
-                        # early exit
-                        break
+                log.info(f'Rekognition finds {len(labels)} labels from {device_label} ({image_source}): {labels!s}')
             if person_count > 0:
-                event_detail = f'{device_label} ({image_source}): {person_count} people detected.'
+                additional_info = f'{person_count} person(s) and {len(labels)} things'
+                event_detail = f'{device_label} ({image_source}): {additional_info}.'
                 log.info(event_detail)
-                active_device['event_detail'] = event_detail
+                active_device['event_detail'] = additional_info
         self.socket.send_pyobj((publisher_topic, publisher_data))
 
 
