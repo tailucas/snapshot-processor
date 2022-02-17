@@ -948,16 +948,6 @@ if __name__ == "__main__":
     # start threads
     mq_relay.start()
     snapshotter.start()
-    # ZMQ endpoints
-    pub_ip=app_config.get('app', 'eth0_ip')
-    pub_port=app_config.get('zmq', 'pubsub_port')
-    publisher = ZmqRelay(
-        name='interplexing-beacon',
-        source_zmq_url=URL_WORKER_PUBLISHER,
-        source_socket_type=zmq.PULL,
-        sink_zmq_url=f'tcp://{pub_ip}:{pub_port}',
-        sink_socket_type=zmq.PUB)
-    publisher.start()
     # start the collectors
     observer.start()
     # track external thread explicitly
