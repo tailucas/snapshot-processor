@@ -364,7 +364,7 @@ class Snapshot(ZmqRelay):
         # send image data for processing
         self.socket.send_pyobj((
             None,
-            f'event.{self._mq_device_topic}.{device_name}.image',
+            f'event.notify.{self._mq_device_topic}.{device_name}.image',
             publisher_data
         ))
         # create output file path
@@ -773,7 +773,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                                 if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
                                     self.socket.send_pyobj((
                                         snapshot_path,
-                                        f'event.{self._mq_device_topic}.{device_name}',
+                                        f'event.notify.{self._mq_device_topic}.{device_name}',
                                         event_payload
                                     ))
                             # upload the image snapshot to Cloud
@@ -976,7 +976,7 @@ if __name__ == "__main__":
                 #TODO statistics
                 'device_info': device_info
             }
-            publisher_socket.send_pyobj((f'heartbeat.{mq_relay.device_topic}', heartbeat_payload))
+            publisher_socket.send_pyobj((f'event.heartbeat.{mq_relay.device_topic}', heartbeat_payload))
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
