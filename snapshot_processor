@@ -29,6 +29,7 @@ from googleapiclient.errors import HttpError
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException
 from sentry_sdk import capture_exception
+from sentry_sdk.integrations.logging import ignore_logger
 from socket import error as socket_error
 from ssl import SSLEOFError
 from time import sleep
@@ -93,6 +94,12 @@ from lib.threads import thread_nanny
 from lib.app import ZmqRelay, AppThread
 from lib.zmq import zmq_socket, zmq_term, Closable
 from lib.handler import exception_handler
+
+
+# Reduce Sentry noise from pika loggers
+ignore_logger('pika.adapters.utils.connection_workflow')
+ignore_logger('pika.adapters.utils.io_services_utils')
+
 
 URL_WORKER_RABBIT_PUBLISHER = 'inproc://rabbitmq-publisher'
 URL_WORKER_OBJECT_DETECTOR = 'inproc://object-detector'
