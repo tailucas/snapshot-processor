@@ -21,6 +21,7 @@ from http.client import BadStatusLine
 from io import BytesIO
 from mimetypes import MimeTypes
 from pathlib import Path
+from pika.exceptions import AMQPConnectionError
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
@@ -861,7 +862,11 @@ if __name__ == "__main__":
     swf_worker._worker.unhandled_exception_handler = swf_exception_handler
     swf_worker.start()
     # RabbitMQ relay
-    mq_relay = RabbitMQRelay()
+    try:
+        mq_relay = RabbitMQRelay()
+    except AMQPConnectionError:
+        log.fatal('RabbitMQ failure at startup.', exc_info=1)
+        exit(1)
     # file system listener
     observer = Observer()
     observer.name = observer.__class__.__name__
