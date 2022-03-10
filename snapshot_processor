@@ -875,7 +875,7 @@ if __name__ == "__main__":
     try:
         mq_relay = RabbitMQRelay()
     except AMQPConnectionError:
-        log.fatal('RabbitMQ failure at startup.', exc_info=1)
+        log.warning('RabbitMQ failure at startup.', exc_info=1)
         exit(1)
     # file system listener
     observer = Observer()
