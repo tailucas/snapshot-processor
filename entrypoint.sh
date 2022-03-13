@@ -41,10 +41,6 @@ echo "$(/opt/app/bin/python /opt/app/pylib/cred_tool <<< '{"s": {"opitem": "Goog
 if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
   echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
 fi
-# Google Refresh Token restore
-if [ ! -f /data/snapshot_processor_creds ]; then
-  /opt/app/backup_auth_token.sh
-fi
 
 # aws code commit
 if [ -n "${AWS_REPO_SSH_KEY_ID:-}" ]; then
@@ -207,6 +203,11 @@ cat /opt/app/config/backup_auth_token | sed "s~__APP_USER__~${APP_USER}~g" > /et
 cat /etc/docker.env | egrep -v "^HOME|^USER" > /opt/app/environment.env
 echo "HOME=/data/" >> /opt/app/environment.env
 echo "USER=${APP_USER}" >> /opt/app/environment.env
+
+# Google Refresh Token restore
+if [ ! -f /data/snapshot_processor_creds ]; then
+  /opt/app/backup_auth_token.sh
+fi
 
 echo "export HISTFILE=/data/.bash_history" >> /etc/bash.bashrc
 
