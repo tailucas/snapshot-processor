@@ -207,6 +207,7 @@ echo "USER=${APP_USER}" >> /opt/app/environment.env
 # Google Refresh Token restore
 if [ ! -f /data/snapshot_processor_creds ]; then
   /opt/app/backup_auth_token.sh
+  chown "${APP_USER}:${APP_GROUP}" /data/snapshot_processor_creds
 fi
 
 echo "export HISTFILE=/data/.bash_history" >> /etc/bash.bashrc
