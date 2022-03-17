@@ -21,7 +21,7 @@ from http.client import BadStatusLine
 from io import BytesIO
 from mimetypes import MimeTypes
 from pathlib import Path
-from pika.exceptions import AMQPConnectionError
+from pika.exceptions import AMQPConnectionError, StreamLostError, ConnectionClosedByBroker
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
@@ -178,17 +178,20 @@ class RabbitMQRelay(AppThread):
 
     def process_message(self, zmq_socket):
         event_topic, event_payload = zmq_socket.recv_pyobj()
-        self._mq_channel.basic_publish(
-            exchange=self._mq_config_exchange,
-            routing_key=event_topic,
-            body=make_payload(data=event_payload))
+        try:
+            self._mq_channel.basic_publish(
+                exchange=self._mq_config_exchange,
+                routing_key=event_topic,
+                body=make_payload(data=event_payload))
+        except (ConnectionClosedByBroker, StreamLostError) as e:
+            raise ResourceWarning() from e
 
     def startup(self):
         log.info(f'Using RabbitMQ server at {self._mq_config_server} with {self._mq_exchange_type} ({self._mq_device_topic}) exchange {self._mq_config_exchange}.')
 
     def run(self):
         self.startup()
-        with exception_handler(connect_url=self._source_zmq_url, socket_type=self._source_socket_type) as zmq_socket:
+        with exception_handler(connect_url=self._source_zmq_url, socket_type=self._source_socket_type, and_raise=False, shutdown_on_error=True) as zmq_socket:
             while not threads.shutting_down:
                 self.process_message(zmq_socket=zmq_socket)
 
@@ -624,7 +627,10 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                 # otherwise, clobber the existing parent information
                 gdrive_file['parents'] = [{"kind": "drive#parentReference", "id": gdrive_folder_id}]
             # update the file metadata
-            gdrive_file.Upload()
+            try:
+                gdrive_file.Upload()
+            except ApiRequestError:
+                log.warning(f'Upload error for {filename}.', exc_info=True)
             return True
         return False
 
