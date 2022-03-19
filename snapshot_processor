@@ -88,6 +88,7 @@ from lib.aws.swf import SWFActivityWaiter, \
     DeviceInfoActivity, \
     DeviceWorkflow, \
     SnapshotWorkflow
+from lib.rabbit import ZMQListener, RabbitMQRelay
 from lib.process import SignalHandler, exec_cmd
 from lib import threads
 from lib.threads import thread_nanny
@@ -152,48 +153,6 @@ def create_publisher_struct(device_key, device_label, image_data, storage_url):
         ],
         'storage_url': storage_url
     }
-
-
-class RabbitMQRelay(AppThread):
-
-    def __init__(self):
-        AppThread.__init__(self, name=self.__class__.__name__)
-        self._source_zmq_url = URL_WORKER_RABBIT_PUBLISHER
-        self._source_socket_type = zmq.PULL
-
-        self._mq_config_server = app_config.get('rabbitmq', 'server_address')
-        self._mq_connection = pika.BlockingConnection(pika.ConnectionParameters(host=self._mq_config_server))
-        self._mq_channel = self._mq_connection.channel()
-        self._mq_config_exchange = app_config.get('rabbitmq', 'mq_exchange')
-        self._mq_exchange_type = 'topic'
-        self._mq_channel.exchange_declare(exchange=self._mq_config_exchange, exchange_type=self._mq_exchange_type)
-        self._mq_device_topic = app_config.get('rabbitmq', 'device_topic')
-
-    @property
-    def device_topic(self):
-        return self._mq_device_topic
-
-    def close(self):
-        self._mq_connection.close()
-
-    def process_message(self, zmq_socket):
-        event_topic, event_payload = zmq_socket.recv_pyobj()
-        try:
-            self._mq_channel.basic_publish(
-                exchange=self._mq_config_exchange,
-                routing_key=event_topic,
-                body=make_payload(data=event_payload))
-        except (ConnectionClosedByBroker, StreamLostError) as e:
-            raise ResourceWarning() from e
-
-    def startup(self):
-        log.info(f'Using RabbitMQ server at {self._mq_config_server} with {self._mq_exchange_type} ({self._mq_device_topic}) exchange {self._mq_config_exchange}.')
-
-    def run(self):
-        self.startup()
-        with exception_handler(connect_url=self._source_zmq_url, socket_type=self._source_socket_type, and_raise=False, shutdown_on_error=True) as zmq_socket:
-            while not threads.shutting_down:
-                self.process_message(zmq_socket=zmq_socket)
 
 
 class CameraConfig(object):
@@ -868,6 +827,16 @@ class ObjectDetector(ZmqRelay):
 
 
 if __name__ == "__main__":
+    # control listener
+    mq_server_address=app_config.get('rabbitmq', 'server_address')
+    mq_exchange_name=app_config.get('rabbitmq', 'mq_exchange')
+    mq_device_topic=app_config.get('rabbitmq', 'device_topic')
+    mq_control_listener = ZMQListener(
+        zmq_url=URL_WORKER_APP,
+        mq_server_address=mq_server_address,
+        mq_exchange_name=f'{mq_exchange_name}_control',
+        mq_topic_filter=f'event.control.{mq_device_topic}',
+        mq_exchange_type='direct')
     # connect to SWF
     swf_activity = SnapshotActivity(URL_WORKER_APP)
     swf_worker = ThreadedActivityExecutor(ActivityWorker(boto_session,
@@ -879,7 +848,12 @@ if __name__ == "__main__":
     swf_worker.start()
     # RabbitMQ relay
     try:
-        mq_relay = RabbitMQRelay()
+        mq_relay = RabbitMQRelay(
+            zmq_url=URL_WORKER_RABBIT_PUBLISHER,
+            mq_server_address=mq_server_address,
+            mq_exchange_name=mq_exchange_name,
+            mq_topic_filter=mq_device_topic,
+            mq_exchange_type='topic')
     except AMQPConnectionError:
         log.warning('RabbitMQ failure at startup.', exc_info=1)
         exit(1)
@@ -967,6 +941,7 @@ if __name__ == "__main__":
         cloud_storage_url=google_drive_uploader.cloud_storage_url,
         mq_device_topic=mq_relay.device_topic)
     # start threads
+    mq_control_listener.start()
     mq_relay.start()
     snapshotter.start()
     # start the collectors
@@ -1005,6 +980,8 @@ if __name__ == "__main__":
         threads.shutting_down = True
         threads.interruptable_sleep.set()
         message = "Shutting down {}..."
+        log.info(message.format('RabbitMQ control'))
+        mq_control_listener.stop()
         log.info(message.format('RabbitMQ relay'))
         mq_relay.close()
         log.info(message.format('SWF activity worker'))
