@@ -246,7 +246,7 @@ class Snapshot(ZmqRelay):
         if isinstance(output_trigger, dict):
             for _,payload in output_trigger.items():
                 device_key, device_label, camera_config_string = payload['data']
-                timestamp = payload['timestamp']
+                timestamp = make_timestamp(payload['timestamp'])
                 # only expect 1 item
                 break
         elif isinstance(output_trigger, tuple):
