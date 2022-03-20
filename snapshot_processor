@@ -272,13 +272,12 @@ class Snapshot(ZmqRelay):
 
     def process_message(self, zmq_socket):
         output_trigger = zmq_socket.recv_pyobj()
-        # FIXME: remove block
         if isinstance(output_trigger, dict):
-            timestamp = output_trigger['timestamp']
-            device_key = output_trigger['device_key']
-            device_label = output_trigger['device_label']
-            if 'device_params' in output_trigger:
-                camera_config_string = output_trigger['device_params']
+            for _,payload in output_trigger.items():
+                device_key, device_label, camera_config_string = payload['data']
+                timestamp = payload['timestamp']
+                # only expect 1 item
+                break
         elif isinstance(output_trigger, tuple):
             #FIXME
             if len(output_trigger) > 3:
