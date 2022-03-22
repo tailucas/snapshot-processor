@@ -578,7 +578,7 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
         self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
 
     def run(self):
-        with exception_handler(closable=self):
+        with exception_handler(closable=self, and_raise=False, shutdown_on_error=True):
             while not threads.shutting_down:
                 (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
                 #FIXME: remove
