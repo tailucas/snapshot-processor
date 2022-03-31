@@ -947,7 +947,7 @@ if __name__ == "__main__":
         log.info(message.format('RabbitMQ relay'))
         try:
             mq_relay.close()
-        except AMQPConnectionError as e:
+        except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
             log.warning(f'When closing: {e!s}')
         log.info(message.format('Application threads'))
         observer.stop()
