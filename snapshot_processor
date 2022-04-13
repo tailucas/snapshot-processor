@@ -274,6 +274,7 @@ class Snapshot(ZmqRelay):
             post_count_metric('Errors')
             return
         image_data = None
+        im = None
         # grab a first frame for overall context
         for tries in range(1, 4):
             try:
@@ -286,40 +287,37 @@ class Snapshot(ZmqRelay):
                 im = Image.open(BytesIO(image_data))
                 break
             except (OSError, ConnectionError, RequestException) as e:
-                log.warning("Problem getting image from {}. Retrying...".format(camera_config),
-                            exc_info=1)
+                log.warning(f'Problem getting image from {camera_config.url} due to {e!s}. Retrying...')
                 sleep(0.1)
                 if tries >= 3:
-                    log.error("Giving up getting image from {} after {} tries: {}".format(
-                        camera_config,
-                        tries,
-                        repr(e)))
+                    log.warning(f'Giving up getting image from {camera_config.url} after {tries} tries: {e!s}')
                     post_count_metric('Errors')
                     break
-        # construct message to publish
-        unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
-        log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
-        # publisher data
-        publisher_data = create_publisher_struct(
-            device_key=device_key,
-            device_label=device_label,
-            image_data=image_data,
-            storage_url=self.cloud_storage_url)
-        # send image data for processing
-        self.socket.send_pyobj((
-            None,
-            f'event.notify.{self._mq_device_topic}.{device_name}.image',
-            publisher_data
-        ))
-        # create output file path
-        output_filename = create_snapshot_path(
-            parent_path=camera_config.camera_storage,
-            operation='fetch',
-            unix_timestamp=unix_timestamp,
-            file_extension=self.default_image_format)
-        log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
-        # persist for Cloud
-        im.save(output_filename)
+        if image_data:
+            # construct message to publish
+            unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
+            log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
+            # publisher data
+            publisher_data = create_publisher_struct(
+                device_key=device_key,
+                device_label=device_label,
+                image_data=image_data,
+                storage_url=self.cloud_storage_url)
+            # send image data for processing
+            self.socket.send_pyobj((
+                None,
+                f'event.notify.{self._mq_device_topic}.{device_name}.image',
+                publisher_data
+            ))
+            # create output file path
+            output_filename = create_snapshot_path(
+                parent_path=camera_config.camera_storage,
+                operation='fetch',
+                unix_timestamp=unix_timestamp,
+                file_extension=self.default_image_format)
+            log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
+            # persist for Cloud
+            im.save(output_filename)
 
 
 class DeviceEvent(object):
