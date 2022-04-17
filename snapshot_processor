@@ -769,29 +769,32 @@ class ObjectDetector(ZmqRelay):
         # find objects using the specified model
         event_detail = None
         if self._rekog_enabled:
-            response = self._rekog.detect_labels(Image={'Bytes': image_bytes})
-            log.debug(f'Rekognition response to {device_label} ({image_source}): {json.dumps(response)}')
-            # find Person labels
-            person_count = 0
-            labels = list()
-            if 'Labels' in response:
-                for detect_dict in response['Labels']:
-                    label_name = detect_dict['Name']
-                    label_confidence = detect_dict['Confidence']
-                    labels.append((label_name, label_confidence))
-                    if label_name == 'Person':
-                        # if instances are provided, sum them
-                        num_instances = len(detect_dict['Instances'])
-                        if num_instances > 0:
-                            person_count += num_instances
-                        else:
-                            person_count += 1
-                log.info(f'Rekognition finds {len(labels)} labels from {device_label} ({image_source}): {labels!s}')
-            if person_count > 0:
-                additional_info = f'{person_count} person(s) and {len(labels)} things'
-                event_detail = f'{device_label} ({image_source}): {additional_info}.'
-                log.info(event_detail)
-                active_device['event_detail'] = additional_info
+            try:
+                response = self._rekog.detect_labels(Image={'Bytes': image_bytes})
+                log.debug(f'Rekognition response to {device_label} ({image_source}): {json.dumps(response)}')
+                # find Person labels
+                person_count = 0
+                labels = list()
+                if 'Labels' in response:
+                    for detect_dict in response['Labels']:
+                        label_name = detect_dict['Name']
+                        label_confidence = detect_dict['Confidence']
+                        labels.append((label_name, label_confidence))
+                        if label_name == 'Person':
+                            # if instances are provided, sum them
+                            num_instances = len(detect_dict['Instances'])
+                            if num_instances > 0:
+                                person_count += num_instances
+                            else:
+                                person_count += 1
+                    log.info(f'Rekognition finds {len(labels)} labels from {device_label} ({image_source}): {labels!s}')
+                if person_count > 0:
+                    additional_info = f'{person_count} person(s) and {len(labels)} things'
+                    event_detail = f'{device_label} ({image_source}): {additional_info}.'
+                    log.info(event_detail)
+                    active_device['event_detail'] = additional_info
+            except Exception:
+                log.warning(f'Rekognition error.', exc_info=True)
         self.socket.send_pyobj((publisher_topic, publisher_data))
 
 
