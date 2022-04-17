@@ -794,7 +794,7 @@ class ObjectDetector(ZmqRelay):
                     log.info(event_detail)
                     active_device['event_detail'] = additional_info
             except Exception:
-                log.warning(f'Rekognition error.', exc_info=True)
+                log.exception(f'Rekognition error.')
         self.socket.send_pyobj((publisher_topic, publisher_data))
 
 
