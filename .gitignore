@@ -1,4 +1,6 @@
 client_secrets.json
+docker-compose.yml
 .idea/
-.balena-app
 .vscode/
+.balena-app
+data/

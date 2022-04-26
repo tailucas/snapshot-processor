@@ -1,14 +1,13 @@
-FROM balenalib/raspberrypi3-debian:buster-run
+FROM debian:buster
 ENV INITSYSTEM on
 ENV container docker
 
-MAINTAINER Tai Lucas <tglucas@gmail.com>
 LABEL Description="snapshot_processor" Vendor="tglucas" Version="1.0"
 
 ENV DEBIAN_FRONTEND noninteractive
 ENV DEBCONF_NONINTERACTIVE_SEEN true
 
-RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommends \
+RUN apt clean && apt update && apt install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     cmake \
@@ -33,9 +32,8 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     lsof \
     make \
     mediainfo \
-    network-manager \
-    openssh-server \
     patch \
+    procps \
     python3-certifi \
     python3-dbus \
     python3 \
@@ -52,18 +50,26 @@ RUN apt-get clean && apt-get update && apt-get install -y --no-install-recommend
     tree \
     vim \
     vsftpd \
-    wget \
-    && pip3 install \
-        tzupdate \
-    && rm -rf /var/lib/apt/lists/*
+    wget
 
 # python3 default
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 
-COPY . /opt/app
-
 # setup
+WORKDIR /opt/app
+COPY requirements.txt .
+COPY pylib/requirements.txt ./pylib/requirements.txt
+COPY app_setup.sh .
 RUN /opt/app/app_setup.sh
+
+COPY config ./config
+COPY settings.yaml .
+COPY backup_auth_token.sh .
+COPY healthchecks_heartbeat.sh .
+COPY entrypoint.sh .
+COPY pylib ./pylib
+COPY pylib/pylib ./lib
+COPY snapshot_processor .
 
 # systemd masks for containers
 # https://github.com/balena-io-library/base-images/blob/master/examples/INITSYSTEM/systemd/systemd.v230/Dockerfile
@@ -79,11 +85,7 @@ RUN systemctl mask \
     graphical.target \
     kmod-static-nodes.service \
     NetworkManager.service \
-    # stop invocation of systemd-logind.service
-    unattended-upgrades.service \
-    # no daily upgrades
-    apt-daily.service \
-    apt-daily-upgrade.service
+    wpa_supplicant.service
 
 STOPSIGNAL 37
 # ftp, ssh, zmq

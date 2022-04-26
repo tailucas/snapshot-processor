@@ -1,6 +1,6 @@
 [Unit]
 Description=%(APP_NAME)s
-After=network.target syslog.service vsftpd.service cron.service
+After=syslog.service vsftpd.service cron.service
 
 [Service]
 Type=simple
