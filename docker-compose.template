@@ -10,8 +10,6 @@ services:
     - /run/lock
     hostname: snapshot-processor
     ports:
-      - "4041:4040"
-      - "80:8080"
       - "21:21"
     volumes:
       - ./data:/data
