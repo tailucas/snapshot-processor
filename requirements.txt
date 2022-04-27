@@ -3,13 +3,8 @@ argparse
 awscli
 boto3
 botoflow
-face_recognition
-netifaces
-numpy
 onepasswordconnectsdk
-opencv-python-headless
 pathtools
-picamera
 python-dateutil
 python-magic
 pytz
