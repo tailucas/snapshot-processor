@@ -115,5 +115,9 @@ if [ -e /sys/devices/57000000.gpu/devfreq/57000000.gpu/trans_stat ]; then
   cat /sys/devices/57000000.gpu/devfreq/57000000.gpu/trans_stat
 fi
 
+env > /etc/environment
+echo "HOME=/data/" >> /etc/environment
+echo "USER=${APP_USER}" >> /etc/environment
+
 # replace this entrypoint with supervisord
 exec env /usr/local/bin/supervisord -n -c /opt/app/supervisord.conf
