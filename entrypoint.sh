@@ -15,14 +15,6 @@ if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
   echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
 fi
 
-# Create /etc/docker.env
-if [ ! -e /etc/docker.env ]; then
-  # https://github.com/balena-io-library/base-images/blob/b4fc5c21dd1e28c21e5661f65809c90ed7605fe6/examples/INITSYSTEM/systemd/systemd/entry.sh
-  for var in $(compgen -e); do
-    printf '%q=%q\n' "$var" "${!var}"
-  done > /etc/docker.env
-fi
-
 set -x
 
 # Run user
@@ -68,31 +60,6 @@ fi
 # set the timezone
 (tzupdate && cp -a /etc/localtime "$TZ_CACHE") || [ -e "$TZ_CACHE" ]
 
-# rsyslog
-if [ -n "${RSYSLOG_SERVER:-}" ]; then
-  cat << EOF > /etc/rsyslog.d/custom.conf
-\$PreserveFQDN on
-\$ActionQueueFileName queue
-\$ActionQueueMaxDiskSpace 1g
-\$ActionQueueSaveOnShutdown on
-\$ActionQueueType LinkedList
-\$ActionResumeRetryCount -1
-*.* @${RSYSLOG_SERVER}${RSYSLOG_TEMPLATE:-}
-EOF
-fi
-# logentries
-if [ -n "${RSYSLOG_LOGENTRIES:-}" ]; then
-  set +x
-  RSYSLOG_LOGENTRIES_TOKEN="$(/opt/app/bin/python /opt/app/pylib/cred_tool <<< '{"s": {"opitem": "Logentries", "opfield": "${APP_NAME}.token"}}')"
-  if [ -n "${RSYSLOG_LOGENTRIES_TOKEN:-}" ] && ! grep -q "$RSYSLOG_LOGENTRIES_TOKEN" /etc/rsyslog.d/logentries.conf; then
-    echo "\$template LogentriesFormat,\"${RSYSLOG_LOGENTRIES_TOKEN} %HOSTNAME% %syslogtag%%msg%\n\"" >> /etc/rsyslog.d/logentries.conf
-    RSYSLOG_TEMPLATE=";LogentriesFormat"
-  fi
-  echo "*.*          @@${RSYSLOG_LOGENTRIES_SERVER}${RSYSLOG_TEMPLATE:-}" >> /etc/rsyslog.d/logentries.conf
-  unset RSYSLOG_LOGENTRIES_TOKEN
-  set -x
-fi
-
 # FTP server setup
 FTP_USER="$(/opt/app/bin/python /opt/app/pylib/cred_tool <<< '{"s": {"opitem": "FTP", "opfield": ".username"}}')"
 id -u "${FTP_USER}" || useradd -r -g "${APP_GROUP}" "${FTP_USER}"
@@ -130,12 +97,7 @@ mkdir -p /var/run/vsftpd/empty
 cat /opt/app/config/app.conf | /opt/app/pylib/config_interpol > "/opt/app/${APP_NAME}.conf"
 cat /opt/app/config/cleanup_snapshots | sed "s~__STORAGE__~${STORAGE_UPLOADS}/~g" > /etc/cron.d/cleanup_snapshots
 cat /opt/app/config/backup_auth_token | sed "s~__APP_USER__~${APP_USER}~g" > /etc/cron.d/backup_auth_token
-
-# Load app environment, overriding HOME and USER
-# https://www.freedesktop.org/software/systemd/man/systemd.exec.html
-cat /etc/docker.env | egrep -v "^HOME|^USER" > /opt/app/environment.env
-echo "HOME=/data/" >> /opt/app/environment.env
-echo "USER=${APP_USER}" >> /opt/app/environment.env
+cat /opt/app/config/supervisord.conf | /opt/app/pylib/config_interpol > /opt/app/supervisord.conf
 
 # Google Refresh Token restore
 if [ ! -f /data/snapshot_processor_creds ]; then
@@ -145,15 +107,6 @@ fi
 
 echo "export HISTFILE=/data/.bash_history" >> /etc/bash.bashrc
 
-# systemd configuration
-for systemdsvc in app; do
-  if [ ! -e "/etc/systemd/system/${systemdsvc}.service" ]; then
-    cat "/opt/app/config/systemd.${systemdsvc}.service" | /opt/app/pylib/config_interpol | tee "/etc/systemd/system/${systemdsvc}.service"
-    chmod 664 "/etc/systemd/system/${systemdsvc}.service"
-    systemctl enable "${systemdsvc}"
-  fi
-done
-
 # output some useful Jetson stats before hand-off
 if [ -e /sys/devices/pwm-fan/pwm_rpm_table ]; then
   cat /sys/devices/pwm-fan/pwm_rpm_table
@@ -162,5 +115,5 @@ if [ -e /sys/devices/57000000.gpu/devfreq/57000000.gpu/trans_stat ]; then
   cat /sys/devices/57000000.gpu/devfreq/57000000.gpu/trans_stat
 fi
 
-# replace this entrypoint with systemd init scope
-exec env DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket SYSTEMD_LOG_LEVEL=info /lib/systemd/systemd quiet systemd.show_status=0
+# replace this entrypoint with supervisord
+exec env /usr/local/bin/supervisord -n -c /opt/app/supervisord.conf
