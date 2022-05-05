@@ -70,7 +70,6 @@ COPY pylib ./pylib
 COPY pylib/pylib ./lib
 COPY snapshot_processor .
 
-STOPSIGNAL 37
 # ftp, ssh, zmq
 EXPOSE 21 22 5556 5558
 CMD ["/opt/app/entrypoint.sh"]
