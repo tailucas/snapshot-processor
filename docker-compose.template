@@ -6,7 +6,7 @@ services:
       driver: syslog
     tmpfs:
     - /tmp
-    hostname: snapshot-processor
+    hostname: __DOCKER_HOSTNAME__
     ports:
       - "21:21"
     volumes:
