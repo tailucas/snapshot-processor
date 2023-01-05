@@ -25,6 +25,8 @@ chmod a-w "${FTP_ROOT}"
 # allow all in the same group to write
 chmod -R g+w "${FTP_ROOT}"
 
+cat /opt/app/config/cleanup_snapshots | sed "s~__STORAGE__~${STORAGE_UPLOADS}/~g" > /etc/cron.d/cleanup_snapshots
+
 cat /etc/vsftpd.conf | /opt/app/pylib/config_interpol /opt/app/config/vsftpd.conf | sort | tee /etc/vsftpd.conf.new
 mv /etc/vsftpd.conf /etc/vsftpd.conf.backup
 mv /etc/vsftpd.conf.new /etc/vsftpd.conf

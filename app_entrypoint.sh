@@ -13,8 +13,6 @@ fi
 
 . /opt/app/ftp_setup.sh
 
-cat /opt/app/config/cleanup_snapshots | sed "s~__STORAGE__~${STORAGE_UPLOADS}/~g" > /etc/cron.d/cleanup_snapshots
-
 # Google Refresh Token restore
 if [ ! -f /data/snapshot_processor_creds ]; then
   /opt/app/backup_auth_token.sh
