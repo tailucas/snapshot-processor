@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -eu
 set -o pipefail
 
 set -x
@@ -10,18 +10,17 @@ set -x
 FTP_HOME="/home/${FTP_USER}"
 mkdir -p "${FTP_HOME}/"
 export FTP_ROOT="${FTP_HOME}/ftp"
-export STORAGE_ROOT="/data/ftp"
-STORAGE_UPLOADS="${STORAGE_ROOT}/uploads"
+STORAGE_UPLOADS="${FTP_STORAGE_DIR}/uploads"
 mkdir -p "${STORAGE_UPLOADS}"
 if [ ! -h "$FTP_ROOT" ]; then
-  ln -s "$STORAGE_ROOT" "$FTP_ROOT"
+  ln -s "$FTP_STORAGE_DIR" "$FTP_ROOT"
 fi
 # user sub-directories
 for dir in $(echo "${FTP_CREATE_DIRS:-}" | sed "s/,/ /g"); do
   mkdir -p "${STORAGE_UPLOADS}/${dir}"
 done
 chown -R "${FTP_USER}:app" "${FTP_HOME}/"
-chown -R "${FTP_USER}:app" "${STORAGE_ROOT}/"
+chown -R "${FTP_USER}:app" "${FTP_STORAGE_DIR}/"
 chmod a-w "${FTP_ROOT}"
 # allow all in the same group to write
 chmod -R g+w "${FTP_ROOT}"
