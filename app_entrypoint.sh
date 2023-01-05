@@ -11,7 +11,13 @@ if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
   echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
 fi
 
-. /opt/app/ftp_setup.sh
+set -x
+# snapshot storage
+STORAGE_UPLOADS="/data/ftp/uploads"
+for dir in $(echo "${FTP_CREATE_DIRS:-}" | sed "s/,/ /g"); do
+  mkdir -p "${STORAGE_UPLOADS}/${dir}"
+done
+set +x
 
 # Google Refresh Token restore
 if [ ! -f /data/snapshot_processor_creds ]; then

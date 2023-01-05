@@ -5,15 +5,18 @@ USER root
 COPY requirements.txt .
 # apply override
 RUN /opt/app/app_setup.sh
-# FIXME: use docker-compose build args
-RUN useradd -r -g app ftpuser
-RUN echo "ftpuser:ftppass" | chpasswd
+# cron jobs
+ADD config/backup_auth_token /etc/cron.d/backup_auth_token
+RUN crontab -u app /etc/cron.d/backup_auth_token
+RUN chmod 0600 /etc/cron.d/backup_auth_token
+ADD config/cleanup_snapshots /etc/cron.d/cleanup_snapshots
+RUN crontab -u app /etc/cron.d/cleanup_snapshots
+RUN chmod 0600 /etc/cron.d/cleanup_snapshots
 # switch to user
 USER app
 COPY config ./config
 COPY settings.yaml .
 COPY backup_auth_token.sh .
-COPY ftp_setup.sh .
 # remove base_app
 RUN rm -f /opt/app/base_app
 # add the project application
