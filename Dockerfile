@@ -21,6 +21,7 @@ COPY backup_auth_token.sh .
 RUN rm -f /opt/app/base_app
 # add the project application
 COPY snapshot_processor .
+COPY ftp_server .
 # override entrypoint
 COPY app_entrypoint.sh .
 CMD ["/opt/app/entrypoint.sh"]

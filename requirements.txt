@@ -5,6 +5,7 @@ Pillow
 pytz
 pyzmq
 PyDrive
+pyftpdlib
 requests
 sentry-sdk
 watchdog
