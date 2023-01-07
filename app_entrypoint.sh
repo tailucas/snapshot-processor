@@ -14,13 +14,6 @@ fi
 # FTP server setup
 FTP_ROOT="/data/ftp"
 mkdir -p "${FTP_ROOT}"
-#echo -e "${FTP_USER}:${FTP_PASS}\n" > /opt/app/ftp_authz.txt
-cat << EOF >> /opt/app/supervisord.conf
-[program:ftp]
-command=/opt/app/bin/python /opt/app/ftp_server
-user=app
-autorestart=unexpected
-EOF
 
 # Google Refresh Token restore
 if [ ! -f /data/snapshot_processor_creds ]; then
