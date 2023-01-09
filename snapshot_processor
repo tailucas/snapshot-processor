@@ -813,7 +813,7 @@ class SnapshotFTPHandler(FTPHandler):
             pass
 
     def on_file_sent(self, file):
-        log.info('Sent {file}.')
+        log.info(f'Sent {file}.')
 
     def on_file_received(self, file):
         log.info(f'Received {file}.')
