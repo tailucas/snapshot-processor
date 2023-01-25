@@ -1,1 +1,1 @@
-40,10 * * * * app /opt/app/backup_auth_token.sh
+40,10 * * * * /opt/app/backup_auth_token.sh

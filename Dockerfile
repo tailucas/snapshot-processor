@@ -1,17 +1,21 @@
-FROM tailucas/base-app:latest
+FROM tailucas/base-app:20230125
 # for system/site packages
 USER root
+# system setup
+RUN apk update \
+    && apk upgrade \
+    && apk --no-cache add \
+        jq
 # override dependencies
+ENV PYTHON_ADD_WHEEL 1
 COPY requirements.txt .
 # apply override
 RUN /opt/app/app_setup.sh
 # cron jobs
-ADD config/backup_auth_token /etc/cron.d/backup_auth_token
-RUN crontab -u app /etc/cron.d/backup_auth_token
-RUN chmod 0600 /etc/cron.d/backup_auth_token
-ADD config/cleanup_snapshots /etc/cron.d/cleanup_snapshots
-RUN crontab -u app /etc/cron.d/cleanup_snapshots
-RUN chmod 0600 /etc/cron.d/cleanup_snapshots
+COPY config/backup_auth_token ./config/
+RUN crontab -u app /opt/app/config/backup_auth_token
+COPY config/cleanup_snapshots ./config/
+RUN crontab -u app /opt/app/config/cleanup_snapshots
 # switch to user
 USER app
 COPY config ./config
