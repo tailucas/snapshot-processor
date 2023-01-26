@@ -1,8 +1,7 @@
 #!/usr/bin/env sh
-set -e
+set -eu
 set -o pipefail
 
-. <(cat /opt/app/cron.env | sed 's/^/export /')
 # pip-installed aws cli
 . /opt/app/bin/activate
 AKID="{\"s\": {\"opitem\": \"AWS\", \"opfield\": \"${AWS_DEFAULT_REGION}.akid\"}}"
