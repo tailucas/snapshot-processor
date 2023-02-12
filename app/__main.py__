@@ -44,10 +44,9 @@ from pyftpdlib.servers import FTPServer
 import os.path
 
 # setup builtins used by pylib init
-app_name = Path(__file__).stem
-builtins.APP_NAME = app_name
 builtins.SENTRY_EXTRAS = []
 AWS_REGION = os.environ['AWS_DEFAULT_REGION']
+from . import APP_NAME
 class CredsConfig:
     sentry_dsn: f'opitem:"Sentry" opfield:{APP_NAME}.dsn' = None # type: ignore
     cronitor_token: f'opitem:"cronitor" opfield:.password' = None # type: ignore
@@ -58,21 +57,21 @@ class CredsConfig:
 # instantiate class
 builtins.creds_config = CredsConfig()
 
-from lib import app_config, \
+from pylib import app_config, \
     creds, \
     device_name, \
     log, \
     URL_WORKER_APP
 
-from lib.datetime import make_timestamp, ISO_DATE_FORMAT
-from lib.aws.metrics import post_count_metric
-from lib.rabbit import ZMQListener, RabbitMQRelay
-from lib.process import SignalHandler
-from lib import threads
-from lib.threads import thread_nanny
-from lib.app import ZmqRelay, AppThread
-from lib.zmq import zmq_socket, zmq_term, Closable
-from lib.handler import exception_handler
+from pylib.datetime import make_timestamp, ISO_DATE_FORMAT
+from pylib.aws.metrics import post_count_metric
+from pylib.rabbit import ZMQListener, RabbitMQRelay
+from pylib.process import SignalHandler
+from pylib import threads
+from pylib.threads import thread_nanny
+from pylib.app import ZmqRelay, AppThread
+from pylib.zmq import zmq_socket, zmq_term, Closable
+from pylib.handler import exception_handler
 
 
 # Reduce Sentry noise from pika loggers
@@ -876,7 +875,7 @@ class SnapshotFTPServer(AppThread):
         self.server.serve_forever()
 
 
-if __name__ == "__main__":
+def main():
     # control listener
     mq_server_address=app_config.get('rabbitmq', 'server_address')
     mq_exchange_name=app_config.get('rabbitmq', 'mq_exchange')
@@ -1042,3 +1041,7 @@ if __name__ == "__main__":
     finally:
         zmq_term()
     log.info('Shutdown complete.')
+
+
+if __name__ == "__main__":
+    main()
