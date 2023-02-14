@@ -452,7 +452,7 @@ class GoogleDriveManager(CloudStorage):
                 return None
             log.debug("Creating Google Drive folder '{}' in parent folder '{}'".format(gdrive_folder, parent_id))
             folder = gdrive.CreateFile({
-                'description': "Created by {}".format(app_name), 'title': gdrive_folder,
+                'description': f'Created by {APP_NAME}', 'title': gdrive_folder,
                 'mimeType': 'application/vnd.google-apps.folder',
                 'parents': [{"kind": "drive#parentReference", "id": parent_id}]
             })
@@ -834,7 +834,8 @@ class SnapshotFTPServer(AppThread):
 
     def close(self):
         try:
-            self.server.close_all()
+            if self.server is not None:
+                self.server.close_all()
         except Exception:
             log.warning('Problem shutting down FTP server.', exc_info=True)
 
@@ -855,7 +856,7 @@ class SnapshotFTPServer(AppThread):
         handler.authorizer = authorizer
 
         # Define a customized banner (string returned when client connects)
-        handler.banner = f'{app_name} FTP.'
+        handler.banner = f'{APP_NAME} FTP.'
 
         # Specify a masquerade address and the range of ports to use for
         # passive connections.  Decomment in case you're behind a NAT.
