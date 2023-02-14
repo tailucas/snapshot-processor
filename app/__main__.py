@@ -68,7 +68,7 @@ from pylib.aws.metrics import post_count_metric
 from pylib.rabbit import ZMQListener, RabbitMQRelay
 from pylib.process import SignalHandler
 from pylib import threads
-from pylib.threads import thread_nanny
+from pylib.threads import thread_nanny, die, bye
 from pylib.app import ZmqRelay, AppThread
 from pylib.zmq import zmq_socket, zmq_term, Closable
 from pylib.handler import exception_handler
@@ -1019,9 +1019,7 @@ def main():
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
-        log.warning(str(e))
-        threads.shutting_down = True
-        threads.interruptable_sleep.set()
+        die()
         message = "Shutting down {}..."
         log.info(message.format('FTP server'))
         ftp_server.close()
@@ -1040,7 +1038,7 @@ def main():
         publisher_socket.close()
     finally:
         zmq_term()
-    log.info('Shutdown complete.')
+    bye()
 
 
 if __name__ == "__main__":
