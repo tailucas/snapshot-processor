@@ -225,9 +225,6 @@ class FileType(object):
         return None
 
 
-filetype = None
-
-
 class Snapshot(ZmqRelay):
 
     def __init__(self, camera_profiles, cloud_storage_url, mq_device_topic):
@@ -580,6 +577,8 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
         # determine the Drive folder details synchronously
         self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
 
+        self._filetype = FileType()
+
     def run(self):
         with exception_handler(closable=self, and_raise=False, shutdown_on_error=True):
             while not threads.shutting_down:
@@ -590,7 +589,7 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
 
     def upload(self, file_path, created_time=None):
         # upload the snapshot
-        mime_type = filetype.mime_type(file_path)
+        mime_type = self._filetype.mime_type(file_path)
         log.info("'{}' file {}".format(mime_type, file_path))
         try:
             created_date = None
@@ -960,8 +959,6 @@ def main():
     object_detector = None
     if app_config.getboolean('snapshots', 'object_detection_enabled'):
         object_detector = ObjectDetector()
-    # top-level types
-    filetype = FileType()
     # ensure that auth is properly set up first
     try:
         google_drive_uploader = GoogleDriveUploader(
