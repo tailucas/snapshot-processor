@@ -3,7 +3,7 @@ set -eu
 set -o pipefail
 
 # client details
-echo '{"s": {"opitem": "Google", "opfield": "oath.client_secret"}}' | /opt/app/bin/python /opt/app/pylib/cred_tool > /opt/app/client_secrets.json
+echo '{"s": {"opitem": "Google", "opfield": "oath.client_secret"}}' | poetry run /opt/app/pylib/cred_tool > /opt/app/client_secrets.json
 [ -e /opt/app/client_secrets.json ] && grep -q '[^[:space:]]' /opt/app/client_secrets.json
 if test "$(jq type /opt/app/client_secrets.json | tr -d '"')" != "object"; then
   echo "Invalid JSON /opt/app/client_secrets.json"
