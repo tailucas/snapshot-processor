@@ -16,6 +16,7 @@ import zmq
 from abc import abstractmethod, ABCMeta
 from datetime import datetime, timedelta
 from http.client import BadStatusLine
+from httplib2.error import HttpLib2Error
 from io import BytesIO
 from mimetypes import MimeTypes
 from pathlib import Path
@@ -36,6 +37,7 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated
 from PIL import Image
+from zmq import ZMQError
 
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
@@ -568,11 +570,12 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
 class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
-        AppThread.__init__(self, name=self.__class__.__name__)
-        Closable.__init__(self, connect_url=URL_WORKER_CLOUD_STORAGE, socket_type=zmq.PULL)
+        # set up remote service setup first
         GoogleDriveManager.__init__(self,
             gauth_creds_file=gauth_creds_file,
             gdrive_folder=gdrive_folder)
+        AppThread.__init__(self, name=self.__class__.__name__)
+        Closable.__init__(self, connect_url=URL_WORKER_CLOUD_STORAGE, socket_type=zmq.PULL)
 
         # determine the Drive folder details synchronously
         self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
@@ -725,15 +728,18 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                                         f'event.notify.{self._mq_device_topic}.{device_name}',
                                         event_payload
                                     ))
-                            # upload the image snapshot to Cloud
-                            self.cloud_storage_socket.send_pyobj((
-                                snapshot_path,
-                                device_event.timestamp
-                            ))
+                            try:
+                                # upload the image snapshot to Cloud
+                                self.cloud_storage_socket.send_pyobj((
+                                    snapshot_path,
+                                    device_event.timestamp
+                                ))
+                            except ZMQError:
+                                log.warning(f'Cannot backup {snapshot_path} due to no active cloud storage sink.', exc_info=True)
                     else:
-                        log.warning("Ignored unmapped path event: {}".format(snapshot_path))
+                        log.warning(f'Ignored unmapped path event: {snapshot_path}')
                 except Exception:
-                    log.exception('Cannot process {}'.format(snapshot_path))
+                    log.exception(f'Cannot process {snapshot_path}')
                     capture_exception()
                     sleep(1)
 
@@ -894,9 +900,10 @@ def main():
             mq_exchange_name=mq_exchange_name,
             mq_topic_filter=mq_device_topic,
             mq_exchange_type='topic')
-    except AMQPConnectionError:
-        log.warning('RabbitMQ failure at startup.', exc_info=1)
-        exit(1)
+    except AMQPConnectionError as e:
+        log.exception('RabbitMQ failure at startup.')
+        die(exception=e)
+        bye()
     # file system listener
     observer = Observer()
     observer.name = observer.__class__.__name__
@@ -969,14 +976,22 @@ def main():
             gdrive_folder=app_config.get('gdrive', 'folder'),
             gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
             gdrive_folder_url=google_drive_uploader.cloud_storage_url)
-    except Exception:
-        log.fatal('Google Drive setup failure.', exc_info=1)
-        exit(1)
+    except HttpLib2Error:
+        log.warning('Google Drive will be unavailable until the next restart.', exc_info=True)
+        # acceptable if GDrive setup attempted first
+        google_drive_uploader = None
+        google_drive_archiver = None
+    except Exception as e:
+        die(exception=e)
+        bye()
     # tell the uploader about the Cloud storage URL
-    upload_event_handler.cloud_storage_url = google_drive_uploader.cloud_storage_url
+    cloud_storage_url = None
+    if google_drive_uploader is not None:
+        cloud_storage_url = google_drive_uploader.cloud_storage_url
+    upload_event_handler.cloud_storage_url = cloud_storage_url
     snapshotter = Snapshot(
         camera_profiles=camera_profiles,
-        cloud_storage_url=google_drive_uploader.cloud_storage_url,
+        cloud_storage_url=cloud_storage_url,
         mq_device_topic=mq_relay.device_topic)
     # FTP server
     ftp_server = SnapshotFTPServer(root_dir=app_config.get('snapshots', 'root_dir'))
@@ -998,10 +1013,12 @@ def main():
         log.setLevel(logging.INFO)
         if object_detector:
             object_detector.start()
-        # start Google Drive uploader
-        google_drive_uploader.start()
-        # start the Google Driver archiver last
-        google_drive_archiver.start()
+        if google_drive_uploader is not None:
+            # start Google Drive uploader
+            google_drive_uploader.start()
+        if google_drive_archiver is not None:
+            # start the Google Driver archiver last
+            google_drive_archiver.start()
         # start thread nanny
         nanny = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
         nanny.setDaemon(True)
