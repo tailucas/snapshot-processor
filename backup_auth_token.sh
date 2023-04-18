@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 set -o pipefail
+cd "$(dirname "$0")"
 
 AKID="{\"s\": {\"opitem\": \"AWS\", \"opfield\": \"${AWS_DEFAULT_REGION}.akid\"}}"
 export AWS_ACCESS_KEY_ID="$(echo "${AKID}" | poetry run /opt/app/pylib/cred_tool)"
