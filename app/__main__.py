@@ -714,7 +714,8 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                         log.info('{} from {}'.format(device_event, snapshot_path))
                         file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
                         if '_' in file_base_name:
-                            date_string = ' '.join(file_base_name.split('_')[1:])
+                            # keep in sync with invocations of create_snapshot_path
+                            date_string = ' '.join(file_base_name.split('_')[2:])
                         else:
                             date_string = file_base_name
                         device_event.timestamp = date_string
