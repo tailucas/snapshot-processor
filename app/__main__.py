@@ -117,7 +117,7 @@ def wait_for_file_content(file_path):
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
     return os.path.join(
         parent_path,
-        "{}_".format(operation) + str(unix_timestamp) + '.' + file_extension)
+        f'{operation}_' + str(unix_timestamp) + '.' + file_extension)
 
 
 def create_publisher_struct(device_key, device_label, image_data, storage_url):
@@ -317,9 +317,10 @@ class Snapshot(ZmqRelay):
                 publisher_data
             ))
             # create output file path
+            normalized_name = device_key.lower().replace(' ', '-')
             output_filename = create_snapshot_path(
                 parent_path=camera_config.camera_storage,
-                operation='fetch',
+                operation=f'fetch_{normalized_name}',
                 unix_timestamp=unix_timestamp,
                 file_extension=self.default_image_format)
             log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
