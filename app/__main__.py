@@ -289,15 +289,18 @@ class Snapshot(ZmqRelay):
                 })
                 image_data = r.content
                 im = Image.open(BytesIO(image_data))
-                break
-            except (OSError, ConnectionError, RequestException) as e:
+                if im.format is not None:
+                    break
+                else:
+                    raise AssertionError(f'Bad image data detected: {im!s}')
+            except (OSError, ConnectionError, RequestException, AssertionError) as e:
                 log.warning(f'Problem getting image from {camera_config.url} due to {e!s}. Retrying...')
                 sleep(0.1)
                 if tries >= 3:
                     log.warning(f'Giving up getting image from {camera_config.url} after {tries} tries: {e!s}')
                     post_count_metric('Errors')
                     break
-        if image_data:
+        if image_data is not None and im.format is not None:
             # construct message to publish
             unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
             log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
@@ -803,6 +806,8 @@ class ObjectDetector(ZmqRelay):
                     event_detail = f'{device_label} ({image_source}): {additional_info}.'
                     log.info(event_detail)
                     active_device['event_detail'] = additional_info
+            except self._rekog.exceptions.InvalidImageFormatException:
+                log.warning(f'Rekognition error.', exc_info=True)
             except Exception:
                 log.exception(f'Rekognition error.')
         self.socket.send_pyobj((publisher_topic, publisher_data))
