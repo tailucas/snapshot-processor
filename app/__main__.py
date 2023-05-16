@@ -300,7 +300,7 @@ class Snapshot(ZmqRelay):
                     log.warning(f'Giving up getting image from {camera_config.url} after {tries} tries: {e!s}')
                     post_count_metric('Errors')
                     break
-        if image_data is not None and im.format is not None:
+        if image_data is not None and im is not None and im.format is not None:
             # construct message to publish
             unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
             log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
