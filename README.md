@@ -78,7 +78,11 @@ Beyond the Python dependencies defined in the [Poetry configuration](pyproject.t
 
 ### Installation
 
-0. :stop_sign: This project uses [1Password Secrets Automation][1p-url] to store both application key-value pairs as well as runtime secrets. It is assumed that the connect server containers are already running on your environment. If you do not want to use this, then you'll need to fork this package and make the changes as appropriate. It's actually very easy to set up, but note that 1Password is a paid product with a free-tier for secrets automation. Here is an example of how this looks for my application and the generation of the docker-compose.yml relies on this step. Your secrets automation vault must contain an entry called `ENV.snapshot_processor` with these keys:
+* :stop_sign: This project uses [1Password Secrets Automation][1p-url] to store both application key-value pairs as well as runtime secrets. It is assumed that the connect server containers are already running on your environment. If you do not want to use this, then you'll need to fork this package and make the changes as appropriate. It's actually very easy to set up, but note that 1Password is a paid product with a free-tier for secrets automation.
+
+* :construction: If a Google authorization token is not present on the local file system, [pydrive][gdrive-url] will initiate an [oauth workflow](https://pythonhosted.org/PyDrive/quickstart.html#authentication) which needs to be followed at least once in order to interact with Google Drive. During this flow, a URL will be logged that needs to be followed by the authorizing user at which point the client will store the token and it will be backed up regularly. As long as the token is backed up, it will remain valid until the authorization is revoked.
+
+Here is an example of how this looks for my application and the generation of the docker-compose.yml relies on this step. Your secrets automation vault must contain an entry called `ENV.snapshot_processor` with these keys:
 
 | Variable | Description | Example |
 | --- | --- | --- |
