@@ -38,7 +38,7 @@ The diagrams below show both the class inheritance structure. Here is the relati
 
 See the diagram below for an example about how ZeroMQ is [used](https://github.com/tailucas/pylib/blob/ac05d39592c2264143ec4a37fe76b7e0369515bd/pylib/app.py#L26) as a message relay between threads.
 
-![comms](/../../../../tailucas/tailucas.github.io/blob/main/assets/snapshot-processor/snapshot-processor_zmq_sockets.png)
+![comms](/../../../../tailucas/tailucas.github.io/blob/main/assets/snapshot-processor/snapshot-processor_zmq-sockets.png)
 
 * `ZMQListener` is responsible for receiving RabbitMQ messages from the network and then forwards these through a chain of `ZMQRelay` instances out the way back to the RabbitMQ publisher.
 
