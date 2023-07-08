@@ -104,11 +104,7 @@ def wait_for_file_content(file_path):
             # less than 5 minutes old
             if time.time() - os.path.getmtime(file_path) > 300:
                 break
-            log.warning('Waiting for {}s (try {} of {}) on empty file {}'.format(
-                sleep_delay,
-                tries,
-                max_tries,
-                file_path))
+            log.warning(f'Waiting for {sleep_delay}s (try {tries} of {max_tries}) on empty file {file_path}')
             sleep(sleep_delay)
             if tries >= max_tries:
                 break
@@ -141,7 +137,7 @@ class CameraConfig(object):
         # username:password@ip:port,rtsp_port
         camera_auth, camera_url = camera_config.split('@')
         if ':' not in camera_auth or ':' not in camera_url:
-            raise AssertionError("Camera parameters missing for '{}.'".format(device_key))
+            raise AssertionError(f"Camera parameters missing for '{device_key}.'")
         # split the rtsp port number
         camera_url_parts = camera_url.split(',')
         if len(camera_url_parts) == 1:
@@ -221,7 +217,7 @@ class FileType(object):
 
     def test_type(self, file_path, file_type):
         mime_type = self.mime_type(file_path)
-        if mime_type is not None and mime_type.startswith('{}/'.format(file_type)):
+        if mime_type is not None and mime_type.startswith(f'{file_type}/'):
             # return the specific file type
             return mime_type.split('/')[1]
         return None
@@ -257,15 +253,15 @@ class Snapshot(ZmqRelay):
         elif isinstance(output_trigger, tuple):
             #FIXME
             if len(output_trigger) > 3:
-                log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
+                log.warn(f'Discarding unknown trigger type {type(output_trigger)}')
                 return
             timestamp = make_timestamp()
             device_key, device_label, camera_config_string = output_trigger
         else:
-            log.warn('Discarding unknown trigger type {}'.format(type(output_trigger)))
+            log.warn(f'Discarding unknown trigger type {type(output_trigger)}')
             return
         if device_key not in self.cameras:
-            log.error("Camera configuration missing for '{}.'".format(device_label))
+            log.error(f"Camera configuration missing for '{device_label}.'")
             post_count_metric('Errors')
             return
         try:
@@ -282,7 +278,7 @@ class Snapshot(ZmqRelay):
         # grab a first frame for overall context
         for tries in range(1, 4):
             try:
-                r = requests.get('http://{}/cgi-bin/CGIProxy.fcgi'.format(camera_config.url), params={
+                r = requests.get(f'http://{camera_config.url}/cgi-bin/CGIProxy.fcgi', params={
                     'cmd': self.default_command,
                     'usr': camera_config.username,
                     'pwd': camera_config.password,
@@ -303,7 +299,7 @@ class Snapshot(ZmqRelay):
         if image_data is not None and im is not None and im.format is not None:
             # construct message to publish
             unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
-            log.debug('Basing {} off of {}'.format(unix_timestamp, timestamp))
+            log.debug(f'Basing {unix_timestamp} off of {timestamp}')
             # publisher data
             publisher_data = create_publisher_struct(
                 device_key=device_key,
@@ -323,7 +319,7 @@ class Snapshot(ZmqRelay):
                 operation=f'fetch_{normalized_name}',
                 unix_timestamp=unix_timestamp,
                 file_extension=self.default_image_format)
-            log.info('{} ({} {} {}) => {}.'.format(device_label, im.format, im.size, im.mode, output_filename))
+            log.info(f'{device_label} ({im.format} {im.size} {im.mode}) => {output_filename}.')
             # persist for Cloud
             im.save(output_filename)
 
@@ -424,8 +420,7 @@ class GoogleDriveManager(CloudStorage):
     def gauth(self):
         auth = GoogleAuth()
         if not os.path.exists(self._gauth_creds_file):
-            log.debug('Google credentials not found in [{}]. Interactive setup may follow.'.format(
-                self._gauth_creds_file))
+            log.debug(f'Google credentials not found in [{self._gauth_creds_file}]. Interactive setup may follow.')
         # Try to load saved client credentials
         auth.LoadCredentialsFile(self._gauth_creds_file)
         if auth.credentials is None:
@@ -440,20 +435,19 @@ class GoogleDriveManager(CloudStorage):
         if not os.path.exists(self._gauth_creds_file):
             # Save the current credentials to a file
             auth.SaveCredentialsFile(self._gauth_creds_file)
-            log.debug('Saved Google credentials to {}'.format(self._gauth_creds_file))
+            log.debug(f'Saved Google credentials to {self._gauth_creds_file}')
         return auth
 
     @staticmethod
     def _get_gdrive_folder_id(gdrive, gdrive_folder, parent_id='root', create=True):
-        log.debug("Checking for existence of Google Drive folder '{}'".format(gdrive_folder))
+        log.debug(f"Checking for existence of Google Drive folder '{gdrive_folder}'")
         file_list = gdrive.ListFile({
-            'q': "'{}' in parents and trashed=false and mimeType = 'application/vnd.google-apps.folder'"
-            " and title = '{}'".format(parent_id, gdrive_folder)
+            'q': f"'{parent_id}' in parents and trashed=false and mimeType = 'application/vnd.google-apps.folder' and title = '{gdrive_folder}'"
         }).GetList()
         if len(file_list) == 0:
             if not create:
                 return None
-            log.debug("Creating Google Drive folder '{}' in parent folder '{}'".format(gdrive_folder, parent_id))
+            log.debug(f"Creating Google Drive folder '{gdrive_folder}' in parent folder '{parent_id}'")
             folder = gdrive.CreateFile({
                 'description': f'Created by {APP_NAME}', 'title': gdrive_folder,
                 'mimeType': 'application/vnd.google-apps.folder',
@@ -466,12 +460,8 @@ class GoogleDriveManager(CloudStorage):
             folder_id = file_list[0]['id']
             folder_link = file_list[0]['alternateLink']
         else:
-            raise RuntimeError('Unexpected result listing Google Drive for {}: {}'.format(
-                gdrive_folder, str(file_list)))
-        log.debug("Google Drive folder ID for folder '{}' is '{}'. Visit at {}".format(
-            gdrive_folder,
-            folder_id,
-            folder_link))
+            raise RuntimeError(f'Unexpected result listing Google Drive for {gdrive_folder}: {file_list!s}')
+        log.debug(f"Google Drive folder ID for folder '{gdrive_folder}' is '{folder_id}'. Visit at {folder_link}")
         return folder_id, folder_link
 
 
@@ -491,33 +481,32 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
         self._gdrive_folder_url = gdrive_folder_url
 
     def run(self):
-        while not threads.shutting_down:
-            log.debug('Finding files in {} ({}) to archive.'.format(self._gdrive_folder, self._gdrive_folder_id))
-            try:
-                file_list = self._archive_drive.ListFile({
-                    'q': "'{}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'".format(
-                        self._gdrive_folder_id
-                    ),
-                    'maxResults': 100,
-                })
-                archived = 0
+        with exception_handler(and_raise=False, shutdown_on_error=True):
+            while not threads.shutting_down:
+                log.debug(f'Finding files in {self._gdrive_folder} ({self._gdrive_folder_id}) to archive.')
                 try:
-                    while True:
-                        page = file_list.GetList()
-                        log.info('Inspecting {} files for archival...'.format(len(page)))
-                        for file1 in page:
-                            if self.archive(gdrive=self._archive_drive,
-                                            gdrive_file=file1,
-                                            root_folder_id=self._gdrive_folder_id):
-                                archived += 1
-                except StopIteration:
-                    log.info('Archived {} image snapshots.'.format(archived))
-            except (ApiRequestError, FileNotUploadedError, socket_error, HttpError):
-                log.exception('Archived {} image snapshots.'.format(archived))
-            # prevent memory leaks
-            self._folder_id_cache.clear()
-            # sleep until tomorrow
-            threads.interruptable_sleep.wait(60*60*24)
+                    file_list = self._archive_drive.ListFile({
+                        'q': f"'{self._gdrive_folder_id}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'",
+                        'maxResults': 100,
+                    })
+                    archived = 0
+                    try:
+                        while True:
+                            page = file_list.GetList()
+                            log.info(f'Inspecting {len(page)} files for archival...')
+                            for file1 in page:
+                                if self.archive(gdrive=self._archive_drive,
+                                                gdrive_file=file1,
+                                                root_folder_id=self._gdrive_folder_id):
+                                    archived += 1
+                    except StopIteration:
+                        log.info(f'Archived {archived} image snapshots.')
+                except (ApiRequestError, BadStatusLine, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
+                    raise ResourceWarning(f'Google Drive problem.') from e
+                # prevent memory leaks
+                self._folder_id_cache.clear()
+                # sleep until tomorrow
+                threads.interruptable_sleep.wait(60*60*24)
 
     def archive(self, gdrive, gdrive_file, root_folder_id):
         filename = gdrive_file['title']
@@ -525,7 +514,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
         created_date = dateutil.parser.parse(gdrive_file['createdDate'])
         td = now - created_date
         if td > timedelta(days=1):
-            log.info('Archiving {} created {} days ago.'.format(filename, td.days))
+            log.info(f'Archiving {filename} created {td.days} days ago.')
             ymd_date = created_date.strftime('%Y-%m-%d')
             if ymd_date in self._folder_id_cache:
                 gdrive_folder_id = self._folder_id_cache[ymd_date]
@@ -539,18 +528,18 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                 day_folder_id, _ = self._get_gdrive_folder_id(gdrive, day_folder_name, month_folder_id)
                 self._folder_id_cache[ymd_date] = day_folder_id
                 gdrive_folder_id = day_folder_id
-            log.debug('{} => folder key {} => folder ID {}'.format(filename, ymd_date, gdrive_folder_id))
+            log.debug(f'{filename} => folder key {ymd_date} => folder ID {gdrive_folder_id}')
             # reset the parent folders, include the existing parents if starred
             if gdrive_file['labels']['starred']:
                 parents = list()
                 for parent in gdrive_file['parents']:
                     parent_id = parent['id']
                     parents.append(parent_id)
-                    log.debug('Comparing parent {} with archive folder id {}'.format(parent_id, gdrive_folder_id))
+                    log.debug(f'Comparing parent {parent_id} with archive folder id {gdrive_folder_id}')
                     if gdrive_folder_id == parent_id:
-                        log.debug('{} already archived to {}'.format(filename, gdrive_folder_id))
+                        log.debug(f'{filename} already archived to {gdrive_folder_id}')
                         return False
-                log.info('Archiving starred file {}, but leaving existing parents intact.'.format(filename))
+                log.info(f'Archiving starred file {filename}, but leaving existing parents intact.')
                 # new parent for archival
                 gdrive_parents = [{"kind": "drive#parentReference", "id": gdrive_folder_id}]
                 # existing parents
@@ -563,10 +552,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                 # otherwise, clobber the existing parent information
                 gdrive_file['parents'] = [{"kind": "drive#parentReference", "id": gdrive_folder_id}]
             # update the file metadata
-            try:
-                gdrive_file.Upload()
-            except ApiRequestError:
-                log.warning(f'Upload error for {filename}.', exc_info=True)
+            gdrive_file.Upload()
             return True
         return False
 
@@ -597,19 +583,18 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
     def upload(self, file_path, created_time=None):
         # upload the snapshot
         mime_type = self._filetype.mime_type(file_path)
-        log.info("'{}' file {}".format(mime_type, file_path))
+        log.info(f"'{mime_type}' file {file_path}")
+        created_date = None
+        if created_time is None:
+            log.debug(f"Uploading '{file_path}' to Google Drive")
+        else:
+            # datetime.isoformat doesn't work because of the seconds
+            # separator required by RFC3339, and the extra requirement to have
+            # the colon in the TZ offset if not in UTC.
+            offset = created_time.strftime('%z')
+            created_date = created_time.strftime('%Y-%m-%dT%H:%M:%S.00') + offset[:3] + ':' + offset[3:]
+            log.debug(f"Uploading '{file_path}' to Google Drive with created time of {created_date}")
         try:
-            created_date = None
-            if created_time is None:
-                log.debug("Uploading '{}' to Google Drive".format(file_path))
-            else:
-                # datetime.isoformat doesn't work because of the seconds
-                # separator required by RFC3339, and the extra requirement to have
-                # the colon in the TZ offset if not in UTC.
-                offset = created_time.strftime('%z')
-                created_date = created_time.strftime('%Y-%m-%dT%H:%M:%S.00') + offset[:3] + ':' + offset[3:]
-                log.debug("Uploading '{}' to Google Drive with created time of {}".format(file_path, created_date))
-
             f = self.drive.CreateFile({
                 'title': os.path.basename(file_path),
                 'mimeType': mime_type,
@@ -617,29 +602,18 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
                 'parents': [{"kind": "drive#fileLink", "id": self._gdrive_folder_id}]
             })
             f.SetContentFile(file_path)
-            for i in range(0, 3):
-                try:
-                    f.Upload()
-                except (ApiRequestError, BadStatusLine, SSLEOFError, BrokenPipeError):
-                    if i >= 3:
-                        raise
-                    else:
-                        log.warning("Problem uploading '{}' to Google Drive. Retrying...".format(file_path), exc_info=1)
-                        sleep(1)
-                        continue
-                break
-            link_msg = ""
-            if 'thumbnailLink'in f:
-                link = f['thumbnailLink']
-                # specify our own thumbnail size
-                if '=' in link:
-                    link = link.rsplit('=')[0]
-                    link += '=s1024'
-                link_msg = " Thumbnail at {}".format(link)
-            log.info("Uploaded '{}' to Google Drive folder '{}' (ID: '{}').{}".format(
-                    os.path.basename(file_path), self._gdrive_folder, f['id'], link_msg))
-        except FileNotUploadedError:
-            log.exception('Cannot upload {} to Google Drive'.format(file_path))
+            f.Upload()
+        except (ApiRequestError, BadStatusLine, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
+            raise ResourceWarning(f'Google Drive problem.') from e
+        link_msg = ""
+        if 'thumbnailLink'in f:
+            link = f['thumbnailLink']
+            # specify our own thumbnail size
+            if '=' in link:
+                link = link.rsplit('=')[0]
+                link += '=s1024'
+            link_msg = f" Thumbnail at {link}"
+        log.info(f"Uploaded '{os.path.basename(file_path)}' to Google Drive folder '{self._gdrive_folder}' (ID: '{f['id']}').{link_msg}")
 
 
 class UploadEventHandler(FileSystemEventHandler, Closable):
@@ -652,14 +626,17 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         self.device_events = dict()
         self._snapshot_root = snapshot_root
 
-        fs_observer.schedule(self, self._snapshot_root, recursive=True)
-
-        self.cloud_storage_socket = self.get_socket(zmq.PUSH)
-        self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
-
+        self._fs_observer = fs_observer
+        self.cloud_storage_socket = None
         self._cloud_storage_url = None
 
         self._mq_device_topic = mq_device_topic
+
+    def start(self):
+        # start the file system monitor
+        self.cloud_storage_socket = self.get_socket(zmq.PUSH)
+        self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
+        self._fs_observer.schedule(self, self._snapshot_root, recursive=True)
 
     @property
     def cloud_storage_url(self):
@@ -671,7 +648,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
 
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
-            raise RuntimeError('Image source label {} is already configured.'.format(device_location))
+            raise RuntimeError(f'Image source label {device_location} is already configured.')
         # create pre-canned device events for reuse later
         self.device_events[image_dir] = DeviceEvent(
             device_key=device_key,
@@ -706,12 +683,11 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                 return
             # cross-check that we're in the right place
             if snapshot_path.startswith(self._snapshot_root):
-                # noinspection PyBroadException
-                try:
+                with exception_handler(and_raise=False, shutdown_on_error=True):
                     # image snapshot that can be mapped to a device?
                     device_event = self._get_device_event(snapshot_path)
                     if device_event:
-                        log.info('{} from {}'.format(device_event, snapshot_path))
+                        log.info(f'{device_event} from {snapshot_path}')
                         file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
                         if '_' in file_base_name:
                             # keep in sync with invocations of create_snapshot_path
@@ -719,34 +695,26 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                         else:
                             date_string = file_base_name
                         device_event.timestamp = date_string
-                        with exception_handler(closable=self, and_raise=False, close_on_exit=False):
-                            # do not notify for fetched image data
-                            if 'fetch' not in snapshot_path:
-                                event_payload = {
-                                    'active_devices': [device_event.dict],
-                                    'storage_url': self._cloud_storage_url
-                                }
-                                # start processing the image data
-                                if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
-                                    self.socket.send_pyobj((
-                                        snapshot_path,
-                                        f'event.notify.{self._mq_device_topic}.{device_name}',
-                                        event_payload
-                                    ))
-                            try:
-                                # upload the image snapshot to Cloud
-                                self.cloud_storage_socket.send_pyobj((
+                        # do not notify for fetched image data
+                        if 'fetch' not in snapshot_path:
+                            event_payload = {
+                                'active_devices': [device_event.dict],
+                                'storage_url': self._cloud_storage_url
+                            }
+                            # start processing the image data
+                            if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
+                                self.socket.send_pyobj((
                                     snapshot_path,
-                                    device_event.timestamp
+                                    f'event.notify.{self._mq_device_topic}.{device_name}',
+                                    event_payload
                                 ))
-                            except ZMQError:
-                                log.warning(f'Cannot backup {snapshot_path} due to no active cloud storage sink.', exc_info=True)
+                        # upload the image snapshot to Cloud
+                        self.cloud_storage_socket.send_pyobj((
+                            snapshot_path,
+                            device_event.timestamp
+                        ))
                     else:
                         log.warning(f'Ignored unmapped path event: {snapshot_path}')
-                except Exception:
-                    log.exception(f'Cannot process {snapshot_path}')
-                    capture_exception()
-                    sleep(1)
 
 
 class ObjectDetector(ZmqRelay):
@@ -835,6 +803,7 @@ class SnapshotFTPHandler(FTPHandler):
     def on_incomplete_file_received(self, file):
         log.info(f'Received partial file {file}. Removing...')
         os.remove(file)
+
 
 class SnapshotFTPServer(AppThread):
 
@@ -928,7 +897,7 @@ def main():
     device_info['inputs'] = list()
     for field, input_type in list(input_types.items()):
         input_location = input_locations[field]
-        device_key = '{} {}'.format(input_locations[field], input_type)
+        device_key = f'{input_locations[field]} {input_type}'
         device_info['inputs'].append({
             'type': input_type,
             'location': input_location,
@@ -948,7 +917,7 @@ def main():
         output_device = {}
         if field in output_locations:
             output_location = output_locations[field]
-            device_key = '{} {}'.format(output_location, output_type)
+            device_key = f'{output_location} {output_type}'
             output_device['location'] = output_location
         else:
             device_key = output_type
@@ -967,8 +936,7 @@ def main():
                     output_location.lower().replace(' ', ''))
             })
             camera_profiles[device_key] = camera_profile
-    log.info('Monitoring directories in {} for changes: {}'.format(
-        snapshot_root, str(upload_event_handler.watched_dirs)))
+    log.info(f'Monitoring directories in {snapshot_root} for changes: {upload_event_handler.watched_dirs!s}')
     # object detection
     object_detector = None
     if app_config.getboolean('snapshots', 'object_detection_enabled'):
@@ -1026,6 +994,8 @@ def main():
         if google_drive_archiver is not None:
             # start the Google Driver archiver last
             google_drive_archiver.start()
+        # start processing file system events
+        upload_event_handler.start()
         # start thread nanny
         nanny = threading.Thread(name='nanny', target=thread_nanny, args=(signal_handler,))
         nanny.setDaemon(True)
