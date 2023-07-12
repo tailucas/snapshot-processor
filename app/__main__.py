@@ -75,6 +75,7 @@ from pylib.app import ZmqRelay, AppThread
 from pylib.zmq import zmq_socket, zmq_term, Closable
 from pylib.handler import exception_handler
 
+from botocore.exceptions import EndpointConnectionError
 
 # Reduce Sentry noise from pika loggers
 ignore_logger('pika.adapters.base_connection')
@@ -777,7 +778,9 @@ class ObjectDetector(ZmqRelay):
                     log.info(event_detail)
                     active_device['event_detail'] = additional_info
             except self._rekog.exceptions.InvalidImageFormatException:
-                log.warning(f'Rekognition error.', exc_info=True)
+                log.warning(f'Rekognition image format error.', exc_info=True)
+            except EndpointConnectionError as e:
+                raise ResourceWarning('Rekognition problem.') from e
             except Exception:
                 log.exception(f'Rekognition error.')
         self.socket.send_pyobj((publisher_topic, publisher_data))
