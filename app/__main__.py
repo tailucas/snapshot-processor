@@ -59,21 +59,21 @@ class CredsConfig:
 # instantiate class
 builtins.creds_config = CredsConfig()
 
-from pylib import app_config, \
+from tailucas_pylib import app_config, \
     creds, \
     device_name, \
     log, \
     URL_WORKER_APP
 
-from pylib.datetime import make_timestamp, ISO_DATE_FORMAT
-from pylib.aws.metrics import post_count_metric
-from pylib.rabbit import ZMQListener, RabbitMQRelay
-from pylib.process import SignalHandler
-from pylib import threads
-from pylib.threads import thread_nanny, die, bye
-from pylib.app import ZmqRelay, AppThread
-from pylib.zmq import zmq_socket, zmq_term, Closable
-from pylib.handler import exception_handler
+from tailucas_pylib.datetime import make_timestamp, ISO_DATE_FORMAT
+from tailucas_pylib.aws.metrics import post_count_metric
+from tailucas_pylib.rabbit import ZMQListener, RabbitMQRelay
+from tailucas_pylib.process import SignalHandler
+from tailucas_pylib import threads
+from tailucas_pylib.threads import thread_nanny, die, bye
+from tailucas_pylib.app import ZmqRelay, AppThread
+from tailucas_pylib.zmq import zmq_socket, zmq_term, Closable
+from tailucas_pylib.handler import exception_handler
 
 from botocore.exceptions import EndpointConnectionError
 
