@@ -37,7 +37,6 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated
 from PIL import Image
-from zmq import ZMQError
 
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
