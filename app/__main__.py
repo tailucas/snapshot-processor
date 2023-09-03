@@ -240,8 +240,8 @@ class Snapshot(ZmqRelay):
         self.capture_threads = {}
         self._mq_device_topic = mq_device_topic
 
-    def process_message(self, zmq_socket):
-        output_trigger = zmq_socket.recv_pyobj()
+    def process_message(self, sink_socket):
+        output_trigger = self.socket.recv_pyobj()
         if isinstance(output_trigger, dict):
             for _,payload in output_trigger.items():
                 device_key, device_label, camera_config_string = payload['data']
@@ -305,7 +305,7 @@ class Snapshot(ZmqRelay):
                 image_data=image_data,
                 storage_url=self.cloud_storage_url)
             # send image data for processing
-            self.socket.send_pyobj((
+            sink_socket.send_pyobj((
                 None,
                 f'event.notify.{self._mq_device_topic}.{device_name}.image',
                 publisher_data
@@ -726,8 +726,8 @@ class ObjectDetector(ZmqRelay):
     def startup(self):
         self._rekog = boto3.client('rekognition', region_name=app_config.get('rekognition', 'region'))
 
-    def process_message(self, zmq_socket):
-        (snapshot_path, publisher_topic, publisher_data) = zmq_socket.recv_pyobj()
+    def process_message(self, sink_socket):
+        (snapshot_path, publisher_topic, publisher_data) = self.socket.recv_pyobj()
         active_device = publisher_data['active_devices'][0]
         device_label = active_device['device_label']
         image_bytes = None
@@ -775,7 +775,7 @@ class ObjectDetector(ZmqRelay):
                 raise ResourceWarning('Rekognition problem.') from e
             except Exception:
                 log.exception(f'Rekognition error.')
-        self.socket.send_pyobj((publisher_topic, publisher_data))
+        sink_socket.send_pyobj((publisher_topic, publisher_data))
 
 
 class SnapshotFTPHandler(FTPHandler):
