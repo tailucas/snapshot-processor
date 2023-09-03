@@ -16,6 +16,7 @@ import zmq
 from abc import abstractmethod, ABCMeta
 from datetime import datetime, timedelta
 from http.client import BadStatusLine
+from httplib2.error import HttpLib2Error
 from io import BytesIO
 from mimetypes import MimeTypes
 from pathlib import Path
@@ -36,6 +37,7 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated
 from PIL import Image
+from zmq import ZMQError
 
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
@@ -949,7 +951,7 @@ def main():
             gdrive_folder=app_config.get('gdrive', 'folder'),
             gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
             gdrive_folder_url=google_drive_uploader.cloud_storage_url)
-    except Exception:
+    except HttpLib2Error:
         log.warning('Google Drive will be unavailable until the next restart.', exc_info=True)
         # acceptable if GDrive setup attempted first
         google_drive_uploader = None
