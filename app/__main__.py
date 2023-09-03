@@ -482,32 +482,31 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
         self._gdrive_folder_url = gdrive_folder_url
 
     def run(self):
-        with exception_handler(and_raise=False, shutdown_on_error=True):
-            while not threads.shutting_down:
-                log.debug(f'Finding files in {self._gdrive_folder} ({self._gdrive_folder_id}) to archive.')
+        while not threads.shutting_down:
+            log.debug(f'Finding files in {self._gdrive_folder} ({self._gdrive_folder_id}) to archive.')
+            try:
+                file_list = self._archive_drive.ListFile({
+                    'q': f"'{self._gdrive_folder_id}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'",
+                    'maxResults': 100,
+                })
+                archived = 0
                 try:
-                    file_list = self._archive_drive.ListFile({
-                        'q': f"'{self._gdrive_folder_id}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'",
-                        'maxResults': 100,
-                    })
-                    archived = 0
-                    try:
-                        while True:
-                            page = file_list.GetList()
-                            log.info(f'Inspecting {len(page)} files for archival...')
-                            for file1 in page:
-                                if self.archive(gdrive=self._archive_drive,
-                                                gdrive_file=file1,
-                                                root_folder_id=self._gdrive_folder_id):
-                                    archived += 1
-                    except StopIteration:
-                        log.info(f'Archived {archived} image snapshots.')
-                except (ApiRequestError, BadStatusLine, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
-                    raise ResourceWarning(f'Google Drive problem.') from e
-                # prevent memory leaks
-                self._folder_id_cache.clear()
-                # sleep until tomorrow
-                threads.interruptable_sleep.wait(60*60*24)
+                    while True:
+                        page = file_list.GetList()
+                        log.info(f'Inspecting {len(page)} files for archival...')
+                        for file1 in page:
+                            if self.archive(gdrive=self._archive_drive,
+                                            gdrive_file=file1,
+                                            root_folder_id=self._gdrive_folder_id):
+                                archived += 1
+                except StopIteration:
+                    log.info(f'Archived {archived} image snapshots.')
+            except (ApiRequestError, BadStatusLine, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
+                raise ResourceWarning(f'Google Drive problem.') from e
+            # prevent memory leaks
+            self._folder_id_cache.clear()
+            # sleep until tomorrow
+            threads.interruptable_sleep.wait(60*60*24)
 
     def archive(self, gdrive, gdrive_file, root_folder_id):
         filename = gdrive_file['title']
@@ -558,7 +557,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
         return False
 
 
-class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
+class GoogleDriveUploader(AppThread, GoogleDriveManager):
 
     def __init__(self, gauth_creds_file, gdrive_folder):
         # set up remote service setup first
@@ -566,7 +565,6 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
             gauth_creds_file=gauth_creds_file,
             gdrive_folder=gdrive_folder)
         AppThread.__init__(self, name=self.__class__.__name__)
-        Closable.__init__(self, connect_url=URL_WORKER_CLOUD_STORAGE, socket_type=zmq.PULL)
 
         # determine the Drive folder details synchronously
         self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
@@ -574,9 +572,9 @@ class GoogleDriveUploader(AppThread, Closable, GoogleDriveManager):
         self._filetype = FileType()
 
     def run(self):
-        with exception_handler(closable=self, and_raise=False, shutdown_on_error=True):
+        with exception_handler(connect_url=URL_WORKER_CLOUD_STORAGE, socket_type=zmq.PULL, and_raise=False, shutdown_on_error=True) as zmq_socket:
             while not threads.shutting_down:
-                (snapshot_path, snapshot_timestamp) = self.socket.recv_pyobj()
+                (snapshot_path, snapshot_timestamp) = zmq_socket.recv_pyobj()
                 #FIXME: remove
                 wait_for_file_content(snapshot_path)
                 self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
@@ -684,38 +682,37 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                 return
             # cross-check that we're in the right place
             if snapshot_path.startswith(self._snapshot_root):
-                with exception_handler(and_raise=False, shutdown_on_error=True):
-                    # image snapshot that can be mapped to a device?
-                    device_event = self._get_device_event(snapshot_path)
-                    if device_event:
-                        log.info(f'{device_event} from {snapshot_path}')
-                        file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
-                        if '_' in file_base_name:
-                            # keep in sync with invocations of create_snapshot_path
-                            date_string = ' '.join(file_base_name.split('_')[2:])
-                        else:
-                            date_string = file_base_name
-                        device_event.timestamp = date_string
-                        # do not notify for fetched image data
-                        if 'fetch' not in snapshot_path:
-                            event_payload = {
-                                'active_devices': [device_event.dict],
-                                'storage_url': self._cloud_storage_url
-                            }
-                            # start processing the image data
-                            if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
-                                self.socket.send_pyobj((
-                                    snapshot_path,
-                                    f'event.notify.{self._mq_device_topic}.{device_name}',
-                                    event_payload
-                                ))
-                        # upload the image snapshot to Cloud
-                        self.cloud_storage_socket.send_pyobj((
-                            snapshot_path,
-                            device_event.timestamp
-                        ))
+                # image snapshot that can be mapped to a device?
+                device_event = self._get_device_event(snapshot_path)
+                if device_event:
+                    log.info(f'{device_event} from {snapshot_path}')
+                    file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
+                    if '_' in file_base_name:
+                        # keep in sync with invocations of create_snapshot_path
+                        date_string = ' '.join(file_base_name.split('_')[2:])
                     else:
-                        log.warning(f'Ignored unmapped path event: {snapshot_path}')
+                        date_string = file_base_name
+                    device_event.timestamp = date_string
+                    # do not notify for fetched image data
+                    if 'fetch' not in snapshot_path:
+                        event_payload = {
+                            'active_devices': [device_event.dict],
+                            'storage_url': self._cloud_storage_url
+                        }
+                        # start processing the image data
+                        if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
+                            self.socket.send_pyobj((
+                                snapshot_path,
+                                f'event.notify.{self._mq_device_topic}.{device_name}',
+                                event_payload
+                            ))
+                    # upload the image snapshot to Cloud
+                    self.cloud_storage_socket.send_pyobj((
+                        snapshot_path,
+                        device_event.timestamp
+                    ))
+                else:
+                    log.warning(f'Ignored unmapped path event: {snapshot_path}')
 
 
 class ObjectDetector(ZmqRelay):
@@ -791,7 +788,7 @@ class SnapshotFTPHandler(FTPHandler):
     def on_login(self, username):
         log.info(f'{username} logged in.')
         with exception_handler(connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH, and_raise=False) as zmq_socket:
-            log.info(f'dummy ZMQ event for {username}.')
+            log.info(f'User login {username}.')
             pass
 
     def on_file_sent(self, file):
@@ -800,7 +797,7 @@ class SnapshotFTPHandler(FTPHandler):
     def on_file_received(self, file):
         log.info(f'Received {file}.')
         with exception_handler(connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH, and_raise=False) as zmq_socket:
-            log.info(f'Noop for {file}.')
+            log.info(f'TODO for {file}.')
             pass
 
     def on_incomplete_file_received(self, file):
