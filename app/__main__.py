@@ -229,9 +229,7 @@ class Snapshot(ZmqRelay):
         ZmqRelay.__init__(self,
             name=self.__class__.__name__,
             source_zmq_url=URL_WORKER_APP,
-            source_socket_type=zmq.PULL,
-            sink_zmq_url=URL_WORKER_OBJECT_DETECTOR,
-            sink_socket_type=zmq.PUSH)
+            sink_zmq_url=URL_WORKER_OBJECT_DETECTOR)
 
         self.cameras = camera_profiles
         self.default_command = app_config.get('camera', 'default_command')
@@ -720,9 +718,7 @@ class ObjectDetector(ZmqRelay):
         ZmqRelay.__init__(self,
             name=self.__class__.__name__,
             source_zmq_url=URL_WORKER_OBJECT_DETECTOR,
-            source_socket_type=zmq.PULL,
-            sink_zmq_url=URL_WORKER_RABBIT_PUBLISHER,
-            sink_socket_type=zmq.PUSH)
+            sink_zmq_url=URL_WORKER_RABBIT_PUBLISHER)
 
         self._rekog_enabled = app_config.getboolean('snapshots', 'object_detection_enabled')
         self._rekog = None
