@@ -71,7 +71,7 @@ from tailucas_pylib.process import SignalHandler
 from tailucas_pylib import threads
 from tailucas_pylib.threads import thread_nanny, die, bye
 from tailucas_pylib.app import ZmqRelay, AppThread
-from tailucas_pylib.zmq import zmq_socket, zmq_term, Closable
+from tailucas_pylib.zmq import zmq_socket, zmq_term, Closable, try_close
 from tailucas_pylib.handler import exception_handler
 
 from botocore.exceptions import EndpointConnectionError
@@ -306,7 +306,7 @@ class Snapshot(ZmqRelay):
                 storage_url=self.cloud_storage_url)
             # send image data for processing
             sink_socket.send_pyobj((
-                '',
+                None,
                 f'event.notify.{self._mq_device_topic}.{device_name}.image',
                 publisher_data
             ))
@@ -630,9 +630,13 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
 
     def start(self):
         # start the file system monitor
-        self.cloud_storage_socket = self.get_socket()
+        self.cloud_storage_socket = zmq_socket(socket_type=zmq.PUSH)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
         self._fs_observer.schedule(self, self._snapshot_root, recursive=True)
+
+    def close(self):
+        Closable.close(self)
+        try_close(self.cloud_storage_socket)
 
     @property
     def cloud_storage_url(self):
@@ -735,7 +739,7 @@ class ObjectDetector(ZmqRelay):
         if 'image' in active_device:
             image_bytes = active_device['image']
             image_source = 'fetch'
-        elif snapshot_path is not None or len(snapshot_path) == 0:
+        elif snapshot_path is not None:
             wait_for_file_content(snapshot_path)
             with open(snapshot_path, 'rb') as img_file:
                 image_bytes = img_file.read()
