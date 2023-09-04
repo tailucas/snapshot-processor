@@ -630,7 +630,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
 
     def start(self):
         # start the file system monitor
-        self.cloud_storage_socket = self.get_socket(zmq.PUSH)
+        self.cloud_storage_socket = self.get_socket()
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
         self._fs_observer.schedule(self, self._snapshot_root, recursive=True)
 
