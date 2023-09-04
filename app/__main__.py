@@ -306,7 +306,7 @@ class Snapshot(ZmqRelay):
                 storage_url=self.cloud_storage_url)
             # send image data for processing
             sink_socket.send_pyobj((
-                None,
+                '',
                 f'event.notify.{self._mq_device_topic}.{device_name}.image',
                 publisher_data
             ))
@@ -735,7 +735,7 @@ class ObjectDetector(ZmqRelay):
         if 'image' in active_device:
             image_bytes = active_device['image']
             image_source = 'fetch'
-        elif snapshot_path is not None:
+        elif snapshot_path is not None or len(snapshot_path) == 0:
             wait_for_file_content(snapshot_path)
             with open(snapshot_path, 'rb') as img_file:
                 image_bytes = img_file.read()
@@ -782,18 +782,16 @@ class SnapshotFTPHandler(FTPHandler):
 
     def on_login(self, username):
         log.info(f'{username} logged in.')
-        with exception_handler(connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH, and_raise=False) as zmq_socket:
-            log.info(f'User login {username}.')
-            pass
 
     def on_file_sent(self, file):
         log.info(f'Sent {file}.')
 
     def on_file_received(self, file):
         log.info(f'Received {file}.')
-        with exception_handler(connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH, and_raise=False) as zmq_socket:
-            log.info(f'TODO for {file}.')
-            pass
+        # TODO: send to object detector
+        #with exception_handler(connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH, and_raise=False) as zmq_socket:
+        #    log.info(f'TODO for {file}.')
+        #    pass
 
     def on_incomplete_file_received(self, file):
         log.info(f'Received partial file {file}. Removing...')
