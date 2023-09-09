@@ -801,10 +801,7 @@ class SnapshotFTPHandler(FTPHandler):
 
     def on_file_received(self, file):
         log.info(f'Received {file}.')
-        # TODO: send to object detector
-        #with exception_handler(connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH, and_raise=False) as zmq_socket:
-        #    log.info(f'TODO for {file}.')
-        #    pass
+        # TODO: send to object detector with correct device association
 
     def on_incomplete_file_received(self, file):
         log.info(f'Received partial file {file}. Removing...')
