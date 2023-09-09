@@ -14,6 +14,7 @@ import time
 import zmq
 
 from abc import abstractmethod, ABCMeta
+from cachetools import LRUCache
 from datetime import datetime, timedelta
 from http.client import BadStatusLine
 from httplib2.error import HttpLib2Error
@@ -116,7 +117,7 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
         f'{operation}_' + str(unix_timestamp) + '.' + file_extension)
 
 
-def create_publisher_struct(device_key, device_label, image_data, storage_url):
+def create_publisher_struct(device_key, device_label, image_data, storage_url, storage_path):
     return {
         'active_devices': [
             {
@@ -126,7 +127,8 @@ def create_publisher_struct(device_key, device_label, image_data, storage_url):
                 'image': image_data,
             }
         ],
-        'storage_url': storage_url
+        'storage_url': storage_url,
+        'storage_path': storage_path,
     }
 
 
@@ -271,6 +273,7 @@ class Snapshot(ZmqRelay):
         except AssertionError:
             post_count_metric('Errors')
             return
+        log.info(f'Fetching image data from {device_label} IP camera at {camera_config.url}...')
         image_data = None
         im = None
         # grab a first frame for overall context
@@ -298,18 +301,6 @@ class Snapshot(ZmqRelay):
             # construct message to publish
             unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
             log.debug(f'Basing {unix_timestamp} off of {timestamp}')
-            # publisher data
-            publisher_data = create_publisher_struct(
-                device_key=device_key,
-                device_label=device_label,
-                image_data=image_data,
-                storage_url=self.cloud_storage_url)
-            # send image data for processing
-            sink_socket.send_pyobj((
-                None,
-                f'event.notify.{self._mq_device_topic}.{device_name}.image',
-                publisher_data
-            ))
             # create output file path
             normalized_name = device_key.lower().replace(' ', '-')
             output_filename = create_snapshot_path(
@@ -317,7 +308,20 @@ class Snapshot(ZmqRelay):
                 operation=f'fetch_{normalized_name}',
                 unix_timestamp=unix_timestamp,
                 file_extension=self.default_image_format)
-            log.info(f'{device_label} ({im.format} {im.size} {im.mode}) => {output_filename}.')
+            # publisher data
+            publisher_data = create_publisher_struct(
+                device_key=device_key,
+                device_label=device_label,
+                image_data=image_data,
+                storage_url=self.cloud_storage_url,
+                storage_path=output_filename)
+            log.info(f'Sending {device_label} ({im.format} {im.size} {im.mode}) for object detection...')
+            # send image data for processing
+            sink_socket.send_pyobj((
+                f'event.notify.{self._mq_device_topic}.{device_name}.image',
+                publisher_data
+            ))
+            log.info(f'Saving {device_label} image data to {output_filename}...')
             # persist for Cloud
             im.save(output_filename)
 
@@ -698,12 +702,12 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                     if 'fetch' not in snapshot_path:
                         event_payload = {
                             'active_devices': [device_event.dict],
-                            'storage_url': self._cloud_storage_url
+                            'storage_url': self._cloud_storage_url,
+                            'storage_path': snapshot_path
                         }
                         # start processing the image data
                         if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
                             self.socket.send_pyobj((
-                                snapshot_path,
                                 f'event.notify.{self._mq_device_topic}.{device_name}',
                                 event_payload
                             ))
@@ -726,29 +730,34 @@ class ObjectDetector(ZmqRelay):
 
         self._rekog_enabled = app_config.getboolean('snapshots', 'object_detection_enabled')
         self._rekog = None
+        self._path_cache = LRUCache(maxsize=128)
 
     def startup(self):
         self._rekog = boto3.client('rekognition', region_name=app_config.get('rekognition', 'region'))
 
     def process_message(self, sink_socket):
-        (snapshot_path, publisher_topic, publisher_data) = self.socket.recv_pyobj()
+        (publisher_topic, publisher_data) = self.socket.recv_pyobj()
+        snapshot_path = publisher_data['storage_path']
         active_device = publisher_data['active_devices'][0]
         device_label = active_device['device_label']
+        if snapshot_path in self._path_cache:
+            log.warning(f'{snapshot_path} already processed for {device_label}')
+            return
+        self._path_cache[snapshot_path] = device_label
         image_bytes = None
         image_source = None
         if 'image' in active_device:
             image_bytes = active_device['image']
             image_source = 'fetch'
-        elif snapshot_path is not None:
+        else:
             wait_for_file_content(snapshot_path)
             with open(snapshot_path, 'rb') as img_file:
                 image_bytes = img_file.read()
             image_source = 'upload'
-        else:
-            raise ValueError("No viable image data to use.")
         # find objects using the specified model
         event_detail = None
         if self._rekog_enabled:
+            log.info(f'Detecting objects in {image_source} image cached in {snapshot_path}...')
             try:
                 response = self._rekog.detect_labels(Image={'Bytes': image_bytes})
                 log.debug(f'Rekognition response to {device_label} ({image_source}): {json.dumps(response)}')
