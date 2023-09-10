@@ -39,10 +39,6 @@ from watchdog.observers import Observer
 from zmq import ContextTerminated
 from PIL import Image
 
-from pyftpdlib.authorizers import DummyAuthorizer
-from pyftpdlib.handlers import FTPHandler
-from pyftpdlib.servers import FTPServer
-
 import os.path
 
 # setup builtins used by pylib init
@@ -791,75 +787,6 @@ class ObjectDetector(ZmqRelay):
         sink_socket.send_pyobj((publisher_topic, publisher_data))
 
 
-class SnapshotFTPHandler(FTPHandler):
-
-    def on_login(self, username):
-        log.info(f'{username} logged in.')
-
-    def on_file_sent(self, file):
-        log.info(f'Sent {file}.')
-
-    def on_file_received(self, file):
-        log.info(f'Received {file}.')
-        # TODO: send to object detector with correct device association
-
-    def on_incomplete_file_received(self, file):
-        log.info(f'Received partial file {file}. Removing...')
-        os.remove(file)
-
-
-class SnapshotFTPServer(AppThread):
-
-    def __init__(self, root_dir, port_number=21):
-        AppThread.__init__(self, name=self.__class__.__name__)
-        self.root_dir = root_dir
-        self.port_number = port_number
-        self.server = None
-
-    def close(self):
-        try:
-            if self.server is not None:
-                self.server.close_all()
-        except Exception:
-            log.warning('Problem shutting down FTP server.', exc_info=True)
-
-    def run(self):
-        # Instantiate a dummy authorizer for managing 'virtual' users
-        authorizer = DummyAuthorizer()
-
-        # Define a new user having full r/w permissions and a read-only
-        # anonymous user
-        authorizer.add_user(
-            username=creds.ftp_user,
-            password=creds.ftp_pass,
-            homedir=self.root_dir,
-            perm='elradfmwMT')
-
-        # Designate the FTP handler class
-        handler = SnapshotFTPHandler
-        handler.authorizer = authorizer
-
-        # Define a customized banner (string returned when client connects)
-        handler.banner = f'{APP_NAME} FTP.'
-
-        # Specify a masquerade address and the range of ports to use for
-        # passive connections.  Decomment in case you're behind a NAT.
-        #handler.masquerade_address = '151.25.42.11'
-        #handler.passive_ports = range(60000, 65535)
-
-        # Instantiate FTP server class and listen on 0.0.0.0:21
-        address = ('', self.port_number)
-        self.server = FTPServer(address, handler)
-
-        # set a limit for connections
-        self.server.max_cons = 16
-        self.server.max_cons_per_ip = 5
-
-        log.info(f'Starting FTP server on listening on {address}')
-        # start ftp server
-        self.server.serve_forever()
-
-
 def main():
     # control listener
     mq_server_address=app_config.get('rabbitmq', 'server_address')
@@ -971,13 +898,11 @@ def main():
         camera_profiles=camera_profiles,
         cloud_storage_url=cloud_storage_url,
         mq_device_topic=mq_relay.device_topic)
-    # FTP server
-    ftp_server = SnapshotFTPServer(root_dir=app_config.get('snapshots', 'root_dir'))
     # start threads
     mq_control_listener.start()
     mq_relay.start()
     snapshotter.start()
-    ftp_server.start()
+    #ftp_server.start()
     # start the collectors
     observer.start()
     # track external thread explicitly
@@ -1016,8 +941,6 @@ def main():
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
         die()
         message = "Shutting down {}..."
-        log.info(message.format('FTP server'))
-        ftp_server.close()
         log.info(message.format('RabbitMQ control'))
         mq_control_listener.stop()
         log.info(message.format('RabbitMQ relay'))

@@ -1,4 +1,4 @@
-FROM tailucas/base-app:20230904
+FROM tailucas/base-app:20230910
 # for system/site packages
 USER root
 # generate correct locales
@@ -29,6 +29,7 @@ COPY poetry.lock pyproject.toml ./
 RUN /opt/app/python_setup.sh
 # add the project application
 COPY app/__main__.py ./app/
+COPY app/ftp_server.py ./app/
 # override entrypoint
 COPY app_entrypoint.sh .
 CMD ["/opt/app/entrypoint.sh"]

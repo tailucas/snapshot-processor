@@ -29,3 +29,11 @@ STORAGE_UPLOADS="${FTP_ROOT}/uploads"
 for dir in $(echo "${FTP_CREATE_DIRS:-}" | sed "s/,/ /g"); do
   mkdir -p "${STORAGE_UPLOADS}/${dir}"
 done
+
+cat << EOF >> /opt/app/supervisord.conf
+[program:ftp]
+command=poetry run ftp
+directory=/opt/app/
+user=app
+autorestart=unexpected
+EOF
