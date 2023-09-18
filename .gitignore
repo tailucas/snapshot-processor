@@ -7,4 +7,5 @@ docker-compose.template2
 data/
 .venv/
 venv/
+*.env
 *.code-workspace

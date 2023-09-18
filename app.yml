@@ -1,0 +1,7 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  APP: snapshot_processor
+  DOCKER_APP: snapshot-processor
