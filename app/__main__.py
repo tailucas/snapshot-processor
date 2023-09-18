@@ -27,7 +27,7 @@ from pydrive.drive import GoogleDrive
 from pydrive.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
 from requests.adapters import ConnectionError
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, Timeout
 from sentry_sdk import capture_exception
 from sentry_sdk.integrations.logging import ignore_logger
 from socket import error as socket_error
@@ -275,18 +275,18 @@ class Snapshot(ZmqRelay):
         # grab a first frame for overall context
         for tries in range(1, 4):
             try:
-                r = requests.get(f'http://{camera_config.url}/cgi-bin/CGIProxy.fcgi', params={
+                r = requests.get(f'http://{camera_config.url}/cgi-bin/CGIProxy.fcgi',params={
                     'cmd': self.default_command,
                     'usr': camera_config.username,
                     'pwd': camera_config.password,
-                })
+                },timeout=4)
                 image_data = r.content
                 im = Image.open(BytesIO(image_data))
                 if im.format is not None:
                     break
                 else:
                     raise AssertionError(f'Bad image data detected: {im!s}')
-            except (OSError, ConnectionError, RequestException, AssertionError) as e:
+            except (OSError, ConnectionError, RequestException, AssertionError, Timeout) as e:
                 log.warning(f'Problem getting image from {camera_config.url} due to {e!s}. Retrying...')
                 sleep(0.1)
                 if tries >= 3:
