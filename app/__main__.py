@@ -16,7 +16,7 @@ import zmq
 from abc import abstractmethod, ABCMeta
 from cachetools import LRUCache
 from datetime import datetime, timedelta
-from http.client import BadStatusLine
+from http.client import BadStatusLine, IncompleteRead
 from httplib2.error import HttpLib2Error
 from io import BytesIO
 from mimetypes import MimeTypes
@@ -498,7 +498,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                                 archived += 1
                 except StopIteration:
                     log.info(f'Archived {archived} image snapshots.')
-            except (ApiRequestError, BadStatusLine, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
+            except (ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
                 raise ResourceWarning(f'Google Drive problem.') from e
             # prevent memory leaks
             self._folder_id_cache.clear()
@@ -599,7 +599,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             })
             f.SetContentFile(file_path)
             f.Upload()
-        except (ApiRequestError, BadStatusLine, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
+        except (ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
             raise ResourceWarning(f'Google Drive problem.') from e
         link_msg = ""
         if 'thumbnailLink'in f:
