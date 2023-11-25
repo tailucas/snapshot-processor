@@ -614,7 +614,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
 
 class UploadEventHandler(FileSystemEventHandler, Closable):
 
-    def __init__(self, fs_observer, snapshot_root, mq_device_topic):
+    def __init__(self, fs_observer: Observer, snapshot_root, mq_device_topic):
         FileSystemEventHandler.__init__(self)
         Closable.__init__(self, connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH)
 
@@ -622,7 +622,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         self.device_events = dict()
         self._snapshot_root = snapshot_root
 
-        self._fs_observer = fs_observer
+        self._fs_observer: Observer = fs_observer
         self.cloud_storage_socket = None
         self._cloud_storage_url = None
 
@@ -635,6 +635,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         self._fs_observer.schedule(self, self._snapshot_root, recursive=True)
 
     def close(self):
+        # not calling Observer unschedule on daemon to avoid stuck on lock bug
         Closable.close(self)
         try_close(self.cloud_storage_socket)
 
@@ -669,6 +670,9 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
     # we listen to on-modified events because the file is
     # created and then written to subsequently.
     def on_modified(self, event):
+        if threads.shutting_down:
+            log.warning(f'Ignoring file system event {event} due to shutdown.')
+            return
         """
         :type event: FileModifiedEvent
         """
@@ -800,7 +804,7 @@ def main():
         mq_exchange_type='direct')
     # RabbitMQ relay
     try:
-        mq_relay = RabbitMQRelay(
+        mq_relay: RabbitMQRelay = RabbitMQRelay(
             zmq_url=URL_WORKER_RABBIT_PUBLISHER,
             mq_server_address=mq_server_address,
             mq_exchange_name=mq_exchange_name,
@@ -811,7 +815,7 @@ def main():
         die(exception=e)
         bye()
     # file system listener
-    observer = Observer()
+    observer: Observer = Observer()
     observer.name = observer.__class__.__name__
     snapshot_root = app_config.get('snapshots', 'root_dir')
     upload_event_handler = UploadEventHandler(
@@ -872,6 +876,8 @@ def main():
     if app_config.getboolean('snapshots', 'object_detection_enabled'):
         object_detector = ObjectDetector()
     # ensure that auth is properly set up first
+    google_drive_uploader = None
+    google_drive_archiver = None
     try:
         google_drive_uploader = GoogleDriveUploader(
             gauth_creds_file=app_config.get('gdrive', 'creds_file'),
@@ -891,7 +897,7 @@ def main():
         bye()
     # tell the uploader about the Cloud storage URL
     cloud_storage_url = None
-    if google_drive_uploader is not None:
+    if google_drive_uploader:
         cloud_storage_url = google_drive_uploader.cloud_storage_url
     upload_event_handler.cloud_storage_url = cloud_storage_url
     snapshotter = Snapshot(
@@ -949,8 +955,6 @@ def main():
         except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
             log.warning(f'When closing: {e!s}')
         log.info(message.format('Application threads'))
-        observer.stop()
-        observer.join()
         upload_event_handler.close()
         # since this thread and the signal handler are one and the same
         publisher_socket.close()
