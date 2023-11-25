@@ -1303,13 +1303,13 @@ files = [
 
 [[package]]
 name = "tailucas-pylib"
-version = "0.1.5"
+version = "0.1.7"
 description = "Common Python utility modules"
 optional = false
 python-versions = ">=3.10,<4.0"
 files = [
-    {file = "tailucas_pylib-0.1.5-py3-none-any.whl", hash = "sha256:d88d7a9ce5326e66458e618ce7ca233a3b6365c40b3c099317a54abbb2eef62d"},
-    {file = "tailucas_pylib-0.1.5.tar.gz", hash = "sha256:9ff6e973df7daf8c4e2ed5d1dd8999bb8f463e00f60b724b2054cce18be90c02"},
+    {file = "tailucas_pylib-0.1.7-py3-none-any.whl", hash = "sha256:1c6e1212b7fb0a06c413084ad7b0411905b969fbd4a0a5f1c6b840f9944eec56"},
+    {file = "tailucas_pylib-0.1.7.tar.gz", hash = "sha256:0eda967150135fbb27b96df098a8c88767a7c49fdfaec2f526916e70d4675314"},
 ]
 
 [package.dependencies]

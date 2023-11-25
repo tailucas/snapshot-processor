@@ -1,4 +1,4 @@
-FROM tailucas/base-app:20231004
+FROM tailucas/base-app:20231125
 # for system/site packages
 USER root
 # generate correct locales
@@ -10,9 +10,7 @@ ARG LC_ALL
 ENV LC_ALL=$LC_ALL
 ARG ENCODING
 ENV ENCODING=$ENCODING
-RUN sed -i -e "s/# ${LANG} ${ENCODING}/${LANG} ${ENCODING}/" /etc/locale.gen && \
-    dpkg-reconfigure --frontend=noninteractive locales && \
-    update-locale LANG=${LANG} && locale
+RUN localedef -i ${LANGUAGE} -c -f ${ENCODING} -A /usr/share/locale/locale.alias ${LANG}
 # user scripts
 COPY backup_auth_token.sh .
 # cron jobs
