@@ -60,7 +60,7 @@ tasks:
     cmds:
       - mvn package
   build:
-    deps: [setup, java]
+    deps: [setup]
     desc: Clean up volume directory and build container image.
     preconditions:
       - docker-compose -v
