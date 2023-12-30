@@ -115,6 +115,16 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
 
 def create_publisher_struct(device_key, device_label, image_data, storage_url, storage_path):
     return {
+        'outputs_triggered': [
+            {
+                'device_key': device_key,
+                'device_label': device_label,
+                'type': 'camera',
+                'image': image_data,
+                'storage_url': storage_url,
+                'storage_path': storage_path,
+            }
+        ],
         'active_devices': [
             {
                 'device_key': device_key,
@@ -939,7 +949,9 @@ def main():
         while not threads.shutting_down:
             heartbeat_payload = {
                 #TODO statistics
-                'device_info': device_info
+                'device_info': device_info,
+                'inputs': device_info['inputs'],
+                'outputs': device_info['outputs']
             }
             publisher_socket.send_pyobj((f'event.heartbeat.{mq_relay.device_topic}', heartbeat_payload))
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
