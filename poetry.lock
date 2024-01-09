@@ -24,17 +24,17 @@ trio = ["trio (>=0.23)"]
 
 [[package]]
 name = "awscli"
-version = "1.32.10"
+version = "1.32.15"
 description = "Universal Command Line Environment for AWS."
 optional = false
 python-versions = ">= 3.8"
 files = [
-    {file = "awscli-1.32.10-py3-none-any.whl", hash = "sha256:9dff347e27c9edde5e3cb0f07a5bc70f2768303a28b4271fa2832ff02e4a748e"},
-    {file = "awscli-1.32.10.tar.gz", hash = "sha256:491acb839012ca6a1bfa4123baca2ee46d4114e2463b1fca9cf049c37e554a17"},
+    {file = "awscli-1.32.15-py3-none-any.whl", hash = "sha256:0cbca1a6ff1305ba309aa1a3e509ad9cabb57c0244120b10279caffe77ba2054"},
+    {file = "awscli-1.32.15.tar.gz", hash = "sha256:030ad0d2b5164a995ebd52321102762472a7a65112acc9dc5cb8903a4e9960dc"},
 ]
 
 [package.dependencies]
-botocore = "1.34.10"
+botocore = "1.34.15"
 colorama = ">=0.2.5,<0.4.5"
 docutils = ">=0.10,<0.17"
 PyYAML = ">=3.10,<6.1"
@@ -43,17 +43,17 @@ s3transfer = ">=0.10.0,<0.11.0"
 
 [[package]]
 name = "boto3"
-version = "1.34.10"
+version = "1.34.15"
 description = "The AWS SDK for Python"
 optional = false
 python-versions = ">= 3.8"
 files = [
-    {file = "boto3-1.34.10-py3-none-any.whl", hash = "sha256:8d3d3cc8bffc3fd6c64c55f69327d4e375b6796054dcf09f43ec8b0a9f864a74"},
-    {file = "boto3-1.34.10.tar.gz", hash = "sha256:ea14bc081d9cb40291133f89b3ad9070be360e152d6a98263af7b97a6534b669"},
+    {file = "boto3-1.34.15-py3-none-any.whl", hash = "sha256:f8f16c2d0ec1dca291857f1c138d5c30e01e40f653443cc2679e2f6ae71b05a6"},
+    {file = "boto3-1.34.15.tar.gz", hash = "sha256:2b74c58f475ff0dcf2f3637da9367a9465d29fad971ff5d8dc54ac39554e9022"},
 ]
 
 [package.dependencies]
-botocore = ">=1.34.10,<1.35.0"
+botocore = ">=1.34.15,<1.35.0"
 jmespath = ">=0.7.1,<2.0.0"
 s3transfer = ">=0.10.0,<0.11.0"
 
@@ -62,13 +62,13 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "botocore"
-version = "1.34.10"
+version = "1.34.15"
 description = "Low-level, data-driven core of boto 3."
 optional = false
 python-versions = ">= 3.8"
 files = [
-    {file = "botocore-1.34.10-py3-none-any.whl", hash = "sha256:ad0e924bbdd5469b62ea82a205bd3a9e03a00a61b661ed6446739b82849ea8be"},
-    {file = "botocore-1.34.10.tar.gz", hash = "sha256:e981d2d727f26732753269d60a51a1851ad9de6c1aa823e5443c7b06221aada0"},
+    {file = "botocore-1.34.15-py3-none-any.whl", hash = "sha256:16bcf871e67ef0177593f06e9e5bae4db51c9a9a2e953cb14feeb42d53441a85"},
+    {file = "botocore-1.34.15.tar.gz", hash = "sha256:c3c3404962a6d9d5e1634bd70ed53b8eff1ff17ee9d7a6240e9e8c94db48ad6f"},
 ]
 
 [package.dependencies]
@@ -371,13 +371,13 @@ grpcio-gcp = ["grpcio-gcp (>=0.2.2,<1.0.dev0)"]
 
 [[package]]
 name = "google-api-python-client"
-version = "2.111.0"
+version = "2.113.0"
 description = "Google API Client Library for Python"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "google-api-python-client-2.111.0.tar.gz", hash = "sha256:3a45a53c031478d1c82c7162dd25c9a965247bca6bd438af0838a9d9b8219405"},
-    {file = "google_api_python_client-2.111.0-py2.py3-none-any.whl", hash = "sha256:b605adee2d09a843b97a59925757802904679e44e5599708cedb8939900dfbc7"},
+    {file = "google-api-python-client-2.113.0.tar.gz", hash = "sha256:bcffbc8ffbad631f699cf85aa91993f3dc03060b234ca9e6e2f9135028bd9b52"},
+    {file = "google_api_python_client-2.113.0-py2.py3-none-any.whl", hash = "sha256:25659d488df6c8a69615b2a510af0e63b4c47ab2cb87d71c1e13b28715906e27"},
 ]
 
 [package.dependencies]
@@ -389,13 +389,13 @@ uritemplate = ">=3.0.1,<5"
 
 [[package]]
 name = "google-auth"
-version = "2.25.2"
+version = "2.26.1"
 description = "Google Authentication Library"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "google-auth-2.25.2.tar.gz", hash = "sha256:42f707937feb4f5e5a39e6c4f343a17300a459aaf03141457ba505812841cc40"},
-    {file = "google_auth-2.25.2-py2.py3-none-any.whl", hash = "sha256:473a8dfd0135f75bb79d878436e568f2695dce456764bf3a02b6f8c540b1d256"},
+    {file = "google-auth-2.26.1.tar.gz", hash = "sha256:54385acca5c0fbdda510cd8585ba6f3fcb06eeecf8a6ecca39d3ee148b092590"},
+    {file = "google_auth-2.26.1-py2.py3-none-any.whl", hash = "sha256:2c8b55e3e564f298122a02ab7b97458ccfcc5617840beb5d0ac757ada92c9780"},
 ]
 
 [package.dependencies]
@@ -671,13 +671,13 @@ six = ">=1.6.1"
 
 [[package]]
 name = "onepasswordconnectsdk"
-version = "1.4.0"
+version = "1.4.1"
 description = "Python SDK for 1Password Connect"
 optional = false
 python-versions = ">=3.7,<4.0"
 files = [
-    {file = "onepasswordconnectsdk-1.4.0-py3-none-any.whl", hash = "sha256:c01b4e5d6faf2e985654d19f34e84efacffcc3ba487bcbcec386d7f8d3e8d88e"},
-    {file = "onepasswordconnectsdk-1.4.0.tar.gz", hash = "sha256:a8dd3aa1750ef0d5b095368287e043bc30cc90281169d6aaaebca57d6b4e6c5c"},
+    {file = "onepasswordconnectsdk-1.4.1-py3-none-any.whl", hash = "sha256:8402b893e007d1a339bb5658b7600b32505c88234d74bfdb307e74c14e586e42"},
+    {file = "onepasswordconnectsdk-1.4.1.tar.gz", hash = "sha256:133defedbc4a4658f68e32865330c2d6844b132763037b984cb74aa21dd1e7f5"},
 ]
 
 [package.dependencies]
@@ -1314,13 +1314,13 @@ files = [
 
 [[package]]
 name = "tailucas-pylib"
-version = "0.2.0"
+version = "0.2.2"
 description = "Common Python utility modules"
 optional = false
 python-versions = ">=3.10,<4.0"
 files = [
-    {file = "tailucas_pylib-0.2.0-py3-none-any.whl", hash = "sha256:e937a4ca1a960e814359bebf7afe1d50f65514feccf98ab13f0af09c39fcad47"},
-    {file = "tailucas_pylib-0.2.0.tar.gz", hash = "sha256:5590e1301794af8fc8d3ce2ade176795a7e0ac95eb3296ef03c624594bd9b92b"},
+    {file = "tailucas_pylib-0.2.2-py3-none-any.whl", hash = "sha256:8be27a0fb39c2d3f71e33b3328abc2b779837dc680f081e3a94e3475c8f33a1c"},
+    {file = "tailucas_pylib-0.2.2.tar.gz", hash = "sha256:53700aa45295528a71168ab11e2ca9b24f9b2e426ce05976f3c99c00d8426568"},
 ]
 
 [package.dependencies]
@@ -1420,4 +1420,4 @@ watchmedo = ["PyYAML (>=3.10)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "671fcce63a7656855f89ca9d7fa777d7f62ef07c589da4ac6253d39c0b0063eb"
+content-hash = "37954950f0d64742620ee820330e6bc170a585deba11b6cd158edfadfb6e970c"
