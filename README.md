@@ -82,11 +82,11 @@ Beyond the Python dependencies defined in the [Poetry configuration](pyproject.t
 
 * :construction: If a Google authorization token is not present on the local file system, [pydrive][gdrive-url] will initiate an [oauth workflow](https://pythonhosted.org/PyDrive/quickstart.html#authentication) which needs to be followed at least once in order to interact with Google Drive. During this flow, a URL will be logged that needs to be followed by the authorizing user at which point the client will store the token and it will be backed up regularly. As long as the token is backed up, it will remain valid until the authorization is revoked.
 
-Here is an example of how this looks for my application and the generation of the docker-compose.yml relies on this step. Your secrets automation vault must contain an entry called `ENV.snapshot_processor` with these keys:
+Here is an example of how this looks for my application and the generation of the docker-compose.yml relies on this step. Your secrets automation vault must contain an entry called `ENV.snapshot-processor` with these keys:
 
 | Variable | Description | Example |
 | --- | --- | --- |
-| `APP_NAME` | Application name used in logging and metrics | `snapshot_processor` |
+| `APP_NAME` | Application name used in logging and metrics | `snapshot-processor` |
 | `AWS_ALT_REGION` | AWS region (used for dual-region) | `eu-west-1` |
 | `AWS_CONFIG_FILE` | AWS client configuration file | `/home/app/.aws/config` |
 | `AWS_DEFAULT_REGION` | AWS region | `us-east-1` |

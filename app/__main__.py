@@ -749,6 +749,7 @@ class ObjectDetector(ZmqRelay):
         (publisher_topic, publisher_data) = self.socket.recv_pyobj()
         snapshot_path = publisher_data['storage_path']
         active_device = publisher_data['active_devices'][0]
+        output_triggered = publisher_data['outputs_triggered'][0]
         device_label = active_device['device_label']
         if snapshot_path in self._path_cache:
             log.warning(f'{snapshot_path} already processed for {device_label}')
@@ -792,6 +793,7 @@ class ObjectDetector(ZmqRelay):
                     event_detail = f'{device_label} ({image_source}): {additional_info}.'
                     log.info(event_detail)
                     active_device['event_detail'] = additional_info
+                    output_triggered['event_detail'] = additional_info
             except self._rekog.exceptions.InvalidImageFormatException:
                 log.warning(f'Rekognition image format error.', exc_info=True)
             except EndpointConnectionError as e:
