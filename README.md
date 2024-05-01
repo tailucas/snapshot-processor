@@ -102,7 +102,7 @@ Here is an example of how this looks for my application and the generation of th
 | `INPUT_X_LOCATION` | Device location | *project specific* |
 | `INPUT_X_TYPE` | Device type | `Camera` |
 | `OBJECT_DETECTION_ENABLED` | Detect objects in snapshots | `true` |
-| `OP_CONNECT_SERVER` | 1Password connect server URL | *network specific* |
+| `OP_CONNECT_HOST` | 1Password connect server URL | *network specific* |
 | `OP_CONNECT_TOKEN` | 1Password connect server token | *project specific* |
 | `OP_VAULT` | 1Password vault | *project specific* |
 | `OUTPUT_X_LOCATION` | Device location | *project specific* |

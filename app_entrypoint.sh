@@ -18,11 +18,6 @@ fi
 FTP_ROOT="/data/ftp"
 mkdir -p "${FTP_ROOT}"
 
-# Google Refresh Token restore
-if [ ! -f /data/snapshot_processor_creds ]; then
-  /opt/app/backup_auth_token.sh
-fi
-
 set -x
 # snapshot storage
 STORAGE_UPLOADS="${FTP_ROOT}/uploads"
@@ -37,3 +32,6 @@ directory=/opt/app/
 user=app
 autorestart=unexpected
 EOF
+
+# Google Refresh Token restore
+/opt/app/backup_auth_token.sh
