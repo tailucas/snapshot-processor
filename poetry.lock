@@ -1416,13 +1416,13 @@ files = [
 
 [[package]]
 name = "tailucas-pylib"
-version = "0.3.7"
+version = "0.4.0"
 description = "Common Python utility modules"
 optional = false
 python-versions = "<4.0,>=3.11"
 files = [
-    {file = "tailucas_pylib-0.3.7-py3-none-any.whl", hash = "sha256:dd64539d9076778160a470797c6c2e74d8865033f98f37042455954b49d8e68b"},
-    {file = "tailucas_pylib-0.3.7.tar.gz", hash = "sha256:fd4090e905040a74c7df38c7549674ede20e21c671724901193e0b528172464e"},
+    {file = "tailucas_pylib-0.4.0-py3-none-any.whl", hash = "sha256:982ebe3c6439ed47b6a8dabf82de84bd05717456937cb94e6b6ea5ccdb0cd48c"},
+    {file = "tailucas_pylib-0.4.0.tar.gz", hash = "sha256:ae05aa537ab5c115ba8ca93925ee841224a7aa4f92b1066029786ed560ae53b8"},
 ]
 
 [package.dependencies]
@@ -1522,4 +1522,4 @@ watchmedo = ["PyYAML (>=3.10)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "11d89390324c85d36a73d3be68fb21add941fc92b58b0ca7f0e927eb7ad7ec2c"
+content-hash = "56b7306dda0f6cc31531b691fb4524afe810811e5b9f400f416f64198461cd23"

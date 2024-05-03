@@ -36,7 +36,7 @@ from time import sleep
 from urllib.request import pathname2url
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
-from zmq import ContextTerminated
+from zmq import ContextTerminated, ZMQError
 from PIL import Image
 
 import os.path
@@ -84,6 +84,8 @@ ignore_logger('pika.channel')
 URL_WORKER_RABBIT_PUBLISHER = 'inproc://rabbitmq-publisher'
 URL_WORKER_OBJECT_DETECTOR = 'inproc://object-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
+URL_WORKER_APP_BRIDGE = 'inproc://app-bridge'
+
 
 HEARTBEAT_INTERVAL_SECONDS = 5
 
@@ -115,7 +117,7 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
 
 def create_publisher_struct(device_key, device_label, image_data, storage_url, storage_path):
     return {
-        'outputs_triggered': [
+        'inputs': [
             {
                 'device_key': device_key,
                 'device_label': device_label,
@@ -124,17 +126,7 @@ def create_publisher_struct(device_key, device_label, image_data, storage_url, s
                 'storage_url': storage_url,
                 'storage_path': storage_path,
             }
-        ],
-        'active_devices': [
-            {
-                'device_key': device_key,
-                'device_label': device_label,
-                'type': 'camera',
-                'image': image_data,
-            }
-        ],
-        'storage_url': storage_url,
-        'storage_path': storage_path,
+        ]
     }
 
 
@@ -624,7 +616,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
 
 class UploadEventHandler(FileSystemEventHandler, Closable):
 
-    def __init__(self, fs_observer: Observer, snapshot_root, mq_device_topic):
+    def __init__(self, fs_observer, snapshot_root, mq_device_topic):
         FileSystemEventHandler.__init__(self)
         Closable.__init__(self, connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH)
 
@@ -632,7 +624,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         self.device_events = dict()
         self._snapshot_root = snapshot_root
 
-        self._fs_observer: Observer = fs_observer
+        self._fs_observer = fs_observer
         self.cloud_storage_socket = None
         self._cloud_storage_url = None
 
@@ -710,16 +702,17 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                     device_event.timestamp = date_string
                     # do not notify for fetched image data
                     if 'fetch' not in snapshot_path:
-                        event_payload = {
-                            'active_devices': [device_event.dict],
-                            'storage_url': self._cloud_storage_url,
-                            'storage_path': snapshot_path
-                        }
+                        publisher_data = create_publisher_struct(
+                            device_key=device_event['device_key'],
+                            device_label=device_event['device_label'],
+                            image_data=device_event['image_data'],
+                            storage_url=self._cloud_storage_url,
+                            storage_path=snapshot_path)
                         # start processing the image data
                         if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
                             self.socket.send_pyobj((
                                 f'event.notify.{self._mq_device_topic}.{device_name}',
-                                event_payload
+                                publisher_data
                             ))
                     # upload the image snapshot to Cloud
                     self.cloud_storage_socket.send_pyobj((
@@ -747,18 +740,17 @@ class ObjectDetector(ZmqRelay):
 
     def process_message(self, sink_socket):
         (publisher_topic, publisher_data) = self.socket.recv_pyobj()
-        snapshot_path = publisher_data['storage_path']
-        active_device = publisher_data['active_devices'][0]
-        output_triggered = publisher_data['outputs_triggered'][0]
-        device_label = active_device['device_label']
+        input_device = publisher_data['inputs'][0]
+        device_label = input_device['device_label']
+        snapshot_path = input_device['storage_path']
         if snapshot_path in self._path_cache:
             log.warning(f'{snapshot_path} already processed for {device_label}')
             return
         self._path_cache[snapshot_path] = device_label
         image_bytes = None
         image_source = None
-        if 'image' in active_device:
-            image_bytes = active_device['image']
+        if 'image' in input_device:
+            image_bytes = input_device['image']
             image_source = 'fetch'
         else:
             wait_for_file_content(snapshot_path)
@@ -792,8 +784,7 @@ class ObjectDetector(ZmqRelay):
                     additional_info = f'{person_count} person(s) and {len(labels)} things'
                     event_detail = f'{device_label} ({image_source}): {additional_info}.'
                     log.info(event_detail)
-                    active_device['event_detail'] = additional_info
-                    output_triggered['event_detail'] = additional_info
+                    input_device['event_detail'] = additional_info
             except self._rekog.exceptions.InvalidImageFormatException:
                 log.warning(f'Rekognition image format error.', exc_info=True)
             except EndpointConnectionError as e:
@@ -803,10 +794,56 @@ class ObjectDetector(ZmqRelay):
         sink_socket.send_pyobj((publisher_topic, publisher_data))
 
 
+class BridgeFilter(AppThread):
+
+    def __init__(self):
+        AppThread.__init__(self, name=self.__class__.__name__)
+        #self.bot = zmq_socket(zmq.PUSH)
+
+    def visit_keys(dictionary, parent_key=''):
+        for key, value in dictionary.items():
+            full_key = f'{parent_key}.{key}' if parent_key else key
+            if isinstance(value, dict):
+                BridgeFilter.visit_keys(value, full_key)
+            elif isinstance(value, str) or isinstance(value, int):
+                log.info(f'{full_key}::{value}')
+            else:
+                log.info(f'{full_key}::{type(value)}')
+
+    # noinspection PyBroadException
+    def run(self):
+        #self.bot.connect(URL_WORKER_TELEGRAM_BOT)
+        with exception_handler(connect_url=URL_WORKER_APP_BRIDGE, socket_type=zmq.PULL, and_raise=False) as zmq_socket:
+            while not threads.shutting_down:
+                control_payload = zmq_socket.recv_pyobj()
+                if not isinstance(control_payload, dict):
+                    log.info('Malformed event; expecting dictionary.')
+                    continue
+                if 'camera' in control_payload:
+                    log.info(f'Sending payload {control_payload.keys()}...')
+                    try:
+                        pass
+                        #self.bot.send_pyobj(control_payload['sms'])
+                    except ZMQError as e:
+                        log.warn(f'ZMQ error {e!s}', exc_info=True)
+                    log.info(f'Sent payload.')
+                else:
+                    log.warn(f'Unsupported payload with keys {control_payload.keys()}')
+                    BridgeFilter.visit_keys(control_payload)
+        #try_close(self.bot)
+
+
 def main():
     # control listener
     mq_server_address=app_config.get('rabbitmq', 'server_address')
     mq_exchange_name=app_config.get('rabbitmq', 'mq_exchange')
+    app_bridge = BridgeFilter()
+    mq_listener_bridge = ZMQListener(
+        zmq_url=URL_WORKER_APP_BRIDGE,
+        mq_server_address=mq_server_address,
+        mq_exchange_name=f'{mq_exchange_name}_control',
+        mq_topic_filter='event.trigger.camera',
+        mq_exchange_type='direct')
     mq_device_topic=app_config.get('rabbitmq', 'device_topic')
     mq_control_listener = ZMQListener(
         zmq_url=URL_WORKER_APP,
@@ -827,7 +864,7 @@ def main():
         die(exception=e)
         bye()
     # file system listener
-    observer: Observer = Observer()
+    observer = Observer()
     observer.name = observer.__class__.__name__
     snapshot_root = app_config.get('snapshots', 'root_dir')
     upload_event_handler = UploadEventHandler(
@@ -918,6 +955,8 @@ def main():
         mq_device_topic=mq_relay.device_topic)
     # start threads
     mq_control_listener.start()
+    app_bridge.start()
+    mq_listener_bridge.start()
     mq_relay.start()
     snapshotter.start()
     #ftp_server.start()
@@ -949,13 +988,11 @@ def main():
         # start heartbeat loop
         publisher_socket.connect(URL_WORKER_RABBIT_PUBLISHER)
         while not threads.shutting_down:
-            heartbeat_payload = {
-                #TODO statistics
-                'device_info': device_info,
-                'inputs': device_info['inputs'],
-                'outputs': device_info['outputs']
-            }
-            publisher_socket.send_pyobj((f'event.heartbeat.{mq_relay.device_topic}', heartbeat_payload))
+            publisher_socket.send_pyobj((
+                f'event.heartbeat.{mq_relay.device_topic}',{
+                    'inputs': device_info['inputs'],
+                    'outputs': device_info['outputs']
+                }))
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
     except(KeyboardInterrupt, RuntimeWarning, ContextTerminated) as e:
@@ -963,6 +1000,8 @@ def main():
         message = "Shutting down {}..."
         log.info(message.format('RabbitMQ control'))
         mq_control_listener.stop()
+        log.info(message.format('RabbitMQ bridge'))
+        mq_listener_bridge.stop()
         log.info(message.format('RabbitMQ relay'))
         try:
             mq_relay.close()
