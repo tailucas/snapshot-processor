@@ -84,8 +84,6 @@ ignore_logger('pika.channel')
 URL_WORKER_RABBIT_PUBLISHER = 'inproc://rabbitmq-publisher'
 URL_WORKER_OBJECT_DETECTOR = 'inproc://object-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
-URL_WORKER_APP_BRIDGE = 'inproc://app-bridge'
-
 
 HEARTBEAT_INTERVAL_SECONDS = 5
 
@@ -240,24 +238,28 @@ class Snapshot(ZmqRelay):
         self.capture_threads = {}
         self._mq_device_topic = mq_device_topic
 
+
+    def visit_keys(dictionary, parent_key=''):
+        for key, value in dictionary.items():
+            full_key = f'{parent_key}.{key}' if parent_key else key
+            if isinstance(value, dict):
+                Snapshot.visit_keys(value, full_key)
+            elif isinstance(value, str) or isinstance(value, int):
+                log.info(f'{full_key}::{value}')
+            else:
+                log.info(f'{full_key}::{type(value)}')
+
+
     def process_message(self, sink_socket):
-        output_trigger = self.socket.recv_pyobj()
-        if isinstance(output_trigger, dict):
-            for _,payload in output_trigger.items():
-                device_key, device_label, camera_config_string = payload['data']
-                timestamp = make_timestamp(payload['timestamp'])
-                # only expect 1 item
-                break
-        elif isinstance(output_trigger, tuple):
-            #FIXME
-            if len(output_trigger) > 3:
-                log.warn(f'Discarding unknown trigger type {type(output_trigger)}')
-                return
-            timestamp = make_timestamp()
-            device_key, device_label, camera_config_string = output_trigger
-        else:
-            log.warn(f'Discarding unknown trigger type {type(output_trigger)}')
+        control_payload = self.socket.recv_pyobj()
+        if not isinstance(control_payload, dict) or 'snapshot' not in control_payload or 'output_triggered' not in control_payload['snapshot']:
+            log.error(f'Malformed event payload {control_payload}.')
             return
+        timestamp = make_timestamp(timestamp=control_payload['snapshot']['timestamp'])
+        output_trigger = control_payload['snapshot']['output_triggered']
+        device_key = output_trigger['device_key']
+        device_label = output_trigger['device_label']
+        device_params = output_trigger['device_params']
         if device_key not in self.cameras:
             log.error(f"Camera configuration missing for '{device_label}.'")
             post_count_metric('Errors')
@@ -266,7 +268,7 @@ class Snapshot(ZmqRelay):
             camera_config = CameraConfig(
                 device_key=device_key,
                 device_label=device_label,
-                camera_config=camera_config_string,
+                camera_config=device_params,
                 camera_storage=self.cameras[device_key]['storage'])
         except AssertionError:
             post_count_metric('Errors')
@@ -794,62 +796,16 @@ class ObjectDetector(ZmqRelay):
         sink_socket.send_pyobj((publisher_topic, publisher_data))
 
 
-class BridgeFilter(AppThread):
-
-    def __init__(self):
-        AppThread.__init__(self, name=self.__class__.__name__)
-        #self.bot = zmq_socket(zmq.PUSH)
-
-    def visit_keys(dictionary, parent_key=''):
-        for key, value in dictionary.items():
-            full_key = f'{parent_key}.{key}' if parent_key else key
-            if isinstance(value, dict):
-                BridgeFilter.visit_keys(value, full_key)
-            elif isinstance(value, str) or isinstance(value, int):
-                log.info(f'{full_key}::{value}')
-            else:
-                log.info(f'{full_key}::{type(value)}')
-
-    # noinspection PyBroadException
-    def run(self):
-        #self.bot.connect(URL_WORKER_TELEGRAM_BOT)
-        with exception_handler(connect_url=URL_WORKER_APP_BRIDGE, socket_type=zmq.PULL, and_raise=False) as zmq_socket:
-            while not threads.shutting_down:
-                control_payload = zmq_socket.recv_pyobj()
-                if not isinstance(control_payload, dict):
-                    log.info('Malformed event; expecting dictionary.')
-                    continue
-                if 'camera' in control_payload:
-                    log.info(f'Sending payload {control_payload.keys()}...')
-                    try:
-                        pass
-                        #self.bot.send_pyobj(control_payload['sms'])
-                    except ZMQError as e:
-                        log.warn(f'ZMQ error {e!s}', exc_info=True)
-                    log.info(f'Sent payload.')
-                else:
-                    log.warn(f'Unsupported payload with keys {control_payload.keys()}')
-                    BridgeFilter.visit_keys(control_payload)
-        #try_close(self.bot)
-
-
 def main():
     # control listener
     mq_server_address=app_config.get('rabbitmq', 'server_address')
     mq_exchange_name=app_config.get('rabbitmq', 'mq_exchange')
-    app_bridge = BridgeFilter()
-    mq_listener_bridge = ZMQListener(
-        zmq_url=URL_WORKER_APP_BRIDGE,
-        mq_server_address=mq_server_address,
-        mq_exchange_name=f'{mq_exchange_name}_control',
-        mq_topic_filter='event.trigger.camera',
-        mq_exchange_type='direct')
     mq_device_topic=app_config.get('rabbitmq', 'device_topic')
     mq_control_listener = ZMQListener(
         zmq_url=URL_WORKER_APP,
         mq_server_address=mq_server_address,
         mq_exchange_name=f'{mq_exchange_name}_control',
-        mq_topic_filter=f'event.control.{mq_device_topic}',
+        mq_topic_filter=f'event.trigger.{mq_device_topic}',
         mq_exchange_type='direct')
     # RabbitMQ relay
     try:
@@ -955,8 +911,6 @@ def main():
         mq_device_topic=mq_relay.device_topic)
     # start threads
     mq_control_listener.start()
-    app_bridge.start()
-    mq_listener_bridge.start()
     mq_relay.start()
     snapshotter.start()
     #ftp_server.start()
@@ -1000,8 +954,6 @@ def main():
         message = "Shutting down {}..."
         log.info(message.format('RabbitMQ control'))
         mq_control_listener.stop()
-        log.info(message.format('RabbitMQ bridge'))
-        mq_listener_bridge.stop()
         log.info(message.format('RabbitMQ relay'))
         try:
             mq_relay.close()
