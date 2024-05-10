@@ -793,6 +793,7 @@ class ObjectDetector(ZmqRelay):
                 raise ResourceWarning('Rekognition problem.') from e
             except Exception:
                 log.exception(f'Rekognition error.')
+        log.info(f'Sending detection data for {device_label} to topic {publisher_topic}.')
         sink_socket.send_pyobj((publisher_topic, publisher_data))
 
 
@@ -809,7 +810,7 @@ def main():
         mq_exchange_type='direct')
     # RabbitMQ relay
     try:
-        mq_relay: RabbitMQRelay = RabbitMQRelay(
+        mq_relay = RabbitMQRelay(
             zmq_url=URL_WORKER_RABBIT_PUBLISHER,
             mq_server_address=mq_server_address,
             mq_exchange_name=mq_exchange_name,
