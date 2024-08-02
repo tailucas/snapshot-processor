@@ -28,6 +28,7 @@ tailucas-pylib = "^0.4.0"
 cachetools = "^5.3.3"
 pydantic = "^2.7.1"
 onepasswordconnectsdk = "^1.5.1"
+unleashclient = "^5.12.2"
 
 
 [build-system]

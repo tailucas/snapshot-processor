@@ -38,6 +38,8 @@ from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated, ZMQError
 from PIL import Image
+from UnleashClient import UnleashClient
+
 
 import os.path
 
@@ -52,6 +54,9 @@ class CredsConfig:
     aws_sak: f'opitem:"AWS" opfield:{AWS_REGION}.sak' = None # type: ignore
     ftp_user: f'opitem:"FTP" opfield:.username' = None # type: ignore
     ftp_pass: f'opitem:"FTP" opfield:.password' = None # type: ignore
+    unleash_token: f'opitem:"Unleash" opfield:.password' = None # type: ignore
+    unleash_url: f'opitem:"Unleash" opfield:default.url' = None # type: ignore
+    unleash_app: f'opitem:"Unleash" opfield:default.app_name' = None # type: ignore
 # instantiate class
 builtins.creds_config = CredsConfig()
 
@@ -86,6 +91,14 @@ URL_WORKER_OBJECT_DETECTOR = 'inproc://object-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 
 HEARTBEAT_INTERVAL_SECONDS = 5
+
+
+   # feature flags configuration
+features = UnleashClient(
+    url=creds.unleash_url,
+    app_name=creds.unleash_app,
+    custom_headers={'Authorization': creds.unleash_token})
+features.initialize_client()
 
 
 def wait_for_file_content(file_path):
@@ -761,7 +774,7 @@ class ObjectDetector(ZmqRelay):
             image_source = 'upload'
         # find objects using the specified model
         event_detail = None
-        if self._rekog_enabled:
+        if self._rekog_enabled and features.is_enabled("cloud-object-detection"):
             log.info(f'Detecting objects in {image_source} image cached in {snapshot_path}...')
             try:
                 response = self._rekog.detect_labels(Image={'Bytes': image_bytes})
@@ -793,11 +806,14 @@ class ObjectDetector(ZmqRelay):
                 raise ResourceWarning('Rekognition problem.') from e
             except Exception:
                 log.exception(f'Rekognition error.')
+        else:
+            log.info(f'Not detecting objects in {image_source} image cached in {snapshot_path} due to feature flag or config.')
         log.info(f'Sending detection data for {device_label} to topic {publisher_topic}.')
         sink_socket.send_pyobj((publisher_topic, publisher_data))
 
 
 def main():
+    log.info(f'Using feature flags defined in application {features.unleash_app_name}.')
     # control listener
     mq_server_address=app_config.get('rabbitmq', 'server_address')
     mq_exchange_name=app_config.get('rabbitmq', 'mq_exchange')
