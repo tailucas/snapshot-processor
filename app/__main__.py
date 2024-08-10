@@ -135,7 +135,7 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
         f'{operation}_' + str(unix_timestamp) + '.' + file_extension)
 
 
-def create_publisher_struct(device_key, device_label, image_data, storage_url, storage_path):
+def create_publisher_struct(device_key, device_label, image_data, image_timestamp, storage_url, storage_path):
     return {
         'inputs': [
             {
@@ -143,6 +143,7 @@ def create_publisher_struct(device_key, device_label, image_data, storage_url, s
                 'device_label': device_label,
                 'type': 'camera',
                 'image': image_data,
+                'image_timestamp': str(image_timestamp),
                 'storage_url': storage_url,
                 'storage_path': storage_path,
             }
@@ -335,6 +336,7 @@ class Snapshot(ZmqRelay):
                 device_key=device_key,
                 device_label=device_label,
                 image_data=image_data,
+                image_timestamp=unix_timestamp,
                 storage_url=self.cloud_storage_url,
                 storage_path=output_filename)
             log.info(f'Sending {device_label} ({im.format} {im.size} {im.mode}) for object detection...')
@@ -726,10 +728,12 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                     device_event.timestamp = date_string
                     # do not notify for fetched image data
                     if 'fetch' not in snapshot_path and 'detect' not in snapshot_path:
+                        unix_timestamp = int((device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                         publisher_data = create_publisher_struct(
                             device_key=device_event['device_key'],
                             device_label=device_event['device_label'],
                             image_data=device_event['image_data'],
+                            image_timestamp=unix_timestamp,
                             storage_url=self._cloud_storage_url,
                             storage_path=snapshot_path)
                         # start processing the image data
