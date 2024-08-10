@@ -853,6 +853,8 @@ class ObjectDetector(ZmqRelay):
                     raise ResourceWarning('Rekognition problem.') from e
                 except Exception:
                     log.exception(f'Rekognition error.')
+            else:
+                log.info(f'No viable object detection methods for {image_source} image cached in {snapshot_path}. Check feature flags.')
         else:
             log.info(f'Not detecting objects in {image_source} image cached in {snapshot_path} due to feature flag {FEATURE_FLAG_OBJECT_DETECTION} or config.')
         log.info(f'Sending detection data for {device_label} to topic {publisher_topic}.')
