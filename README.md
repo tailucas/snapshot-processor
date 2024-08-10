@@ -94,7 +94,6 @@ Here is an example of how this looks for my application and the generation of th
 | `DEVICE_NAME` | Used for container host name. | `snapshot-processor` |
 | `FTP_CREATE_DIRS` | IP-camera upload directories | `snapshots/cam1,snapshots/cam2` |
 | `FTP_PASS` | FTP basic-auth password | *project specific* |
-| `FTP_SERVER_ADDRESS` | IP address of FTP server host that runs container | *project specific* |
 | `FTP_UPLOAD_DIR` | Upload directory within the FTP root | `uploads/snapshots` |
 | `FTP_USER` | FTP basic-auth user | *project specific* |
 | `GOOGLE_DRIVE_FOLDER` | Google Drive folder name | *project specific* |

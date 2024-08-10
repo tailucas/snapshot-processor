@@ -90,15 +90,24 @@ URL_WORKER_RABBIT_PUBLISHER = 'inproc://rabbitmq-publisher'
 URL_WORKER_OBJECT_DETECTOR = 'inproc://object-detector'
 URL_WORKER_CLOUD_STORAGE = 'inproc://cloud-storage'
 
+FEATURE_FLAG_OBJECT_DETECTION = 'object-detection'
+FEATURE_FLAG_CLOUD_OBJECT_DETECTION = 'cloud-object-detection'
+FEATURE_FLAG_LOCAL_OBJECT_DETECTION = 'local-object-detection'
+FEATURE_FLAG_CLOUD_STORAGE_MANAGEMENT = 'cloud-storage-management'
+
 HEARTBEAT_INTERVAL_SECONDS = 5
 
 
-   # feature flags configuration
+# feature flags configuration
 features = UnleashClient(
     url=creds.unleash_url,
     app_name=creds.unleash_app,
     custom_headers={'Authorization': creds.unleash_token})
 features.initialize_client()
+
+
+from ultralytics import YOLO
+from ultralytics.engine.results import Results
 
 
 def wait_for_file_content(file_path):
@@ -716,7 +725,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                         date_string = file_base_name
                     device_event.timestamp = date_string
                     # do not notify for fetched image data
-                    if 'fetch' not in snapshot_path:
+                    if 'fetch' not in snapshot_path and 'detect' not in snapshot_path:
                         publisher_data = create_publisher_struct(
                             device_key=device_event['device_key'],
                             device_label=device_event['device_label'],
@@ -746,12 +755,16 @@ class ObjectDetector(ZmqRelay):
             source_zmq_url=URL_WORKER_OBJECT_DETECTOR,
             sink_zmq_url=URL_WORKER_RABBIT_PUBLISHER)
 
-        self._rekog_enabled = app_config.getboolean('snapshots', 'object_detection_enabled')
+        self._od_enabled = app_config.getboolean('snapshots', 'object_detection_enabled')
         self._rekog = None
         self._path_cache = LRUCache(maxsize=128)
+        self._local_model = None
 
     def startup(self):
         self._rekog = boto3.client('rekognition', region_name=app_config.get('rekognition', 'region'))
+        model_name = app_config.get('object_detection', 'model')
+        log.info(f'Using Ultralytics model {model_name} for local object detection.')
+        self._local_model = YOLO(model_name)
 
     def process_message(self, sink_socket):
         (publisher_topic, publisher_data) = self.socket.recv_pyobj()
@@ -774,40 +787,74 @@ class ObjectDetector(ZmqRelay):
             image_source = 'upload'
         # find objects using the specified model
         event_detail = None
-        if self._rekog_enabled and features.is_enabled("cloud-object-detection"):
+        if features.is_enabled(FEATURE_FLAG_OBJECT_DETECTION) and self._od_enabled:
             log.info(f'Detecting objects in {image_source} image cached in {snapshot_path}...')
-            try:
-                response = self._rekog.detect_labels(Image={'Bytes': image_bytes})
-                log.debug(f'Rekognition response to {device_label} ({image_source}): {json.dumps(response)}')
-                # find Person labels
-                person_count = 0
-                labels = list()
-                if 'Labels' in response:
-                    for detect_dict in response['Labels']:
-                        label_name = detect_dict['Name']
-                        label_confidence = detect_dict['Confidence']
-                        labels.append((label_name, label_confidence))
-                        if label_name == 'Person':
-                            # if instances are provided, sum them
-                            num_instances = len(detect_dict['Instances'])
-                            if num_instances > 0:
-                                person_count += num_instances
-                            else:
+            if features.is_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION):
+                im = Image.open(BytesIO(image_bytes))
+                results = None
+                try:
+                    results = self._local_model(im)
+                except Exception:
+                    log.exception(f'Local detection error.')
+                if results:
+                    # find Person labels
+                    person_count = 0
+                    labels = list()
+                    for result in results:
+                        if 'fetch' in snapshot_path:
+                            detect_filename = snapshot_path.replace('fetch', 'detect')
+                            log.info(f'Saving detection result to {detect_filename}...')
+                            try:
+                                result.save(filename=detect_filename)
+                            except Exception:
+                                log.exception(f'Unable to save detection result to {detect_filename}')
+                        for detect_dict in result.summary():
+                            log.debug(f'Local inference {detect_dict!s}')
+                            label_name = detect_dict['name']
+                            label_confidence = detect_dict['confidence']
+                            labels.append((label_name, label_confidence))
+                            if label_name == 'person':
                                 person_count += 1
-                    log.info(f'Rekognition finds {len(labels)} labels from {device_label} ({image_source}): {labels!s}')
-                if person_count > 0:
-                    additional_info = f'{person_count} person(s) and {len(labels)} things'
-                    event_detail = f'{device_label} ({image_source}): {additional_info}.'
-                    log.info(event_detail)
-                    input_device['event_detail'] = additional_info
-            except self._rekog.exceptions.InvalidImageFormatException:
-                log.warning(f'Rekognition image format error.', exc_info=True)
-            except EndpointConnectionError as e:
-                raise ResourceWarning('Rekognition problem.') from e
-            except Exception:
-                log.exception(f'Rekognition error.')
+                    log.info(f'YOLO finds {len(labels)} labels from {device_label} ({image_source}): {labels!s}')
+                    if person_count > 0:
+                        additional_info = f'{person_count} person(s) and {len(labels)} things'
+                        event_detail = f'{device_label} ({image_source}): {additional_info}.'
+                        log.info(event_detail)
+                        input_device['event_detail'] = additional_info
+            elif features.is_enabled(FEATURE_FLAG_CLOUD_OBJECT_DETECTION):
+                log.info(f'Detecting objects in {image_source} image cached in {snapshot_path}...')
+                try:
+                    response = self._rekog.detect_labels(Image={'Bytes': image_bytes})
+                    log.debug(f'Rekognition response to {device_label} ({image_source}): {json.dumps(response)}')
+                    # find Person labels
+                    person_count = 0
+                    labels = list()
+                    if 'Labels' in response:
+                        for detect_dict in response['Labels']:
+                            label_name = detect_dict['Name']
+                            label_confidence = detect_dict['Confidence']
+                            labels.append((label_name, label_confidence))
+                            if label_name == 'Person':
+                                # if instances are provided, sum them
+                                num_instances = len(detect_dict['Instances'])
+                                if num_instances > 0:
+                                    person_count += num_instances
+                                else:
+                                    person_count += 1
+                        log.info(f'Rekognition finds {len(labels)} labels from {device_label} ({image_source}): {labels!s}')
+                    if person_count > 0:
+                        additional_info = f'{person_count} person(s) and {len(labels)} things'
+                        event_detail = f'{device_label} ({image_source}): {additional_info}.'
+                        log.info(event_detail)
+                        input_device['event_detail'] = additional_info
+                except self._rekog.exceptions.InvalidImageFormatException:
+                    log.warning(f'Rekognition image format error.', exc_info=True)
+                except EndpointConnectionError as e:
+                    raise ResourceWarning('Rekognition problem.') from e
+                except Exception:
+                    log.exception(f'Rekognition error.')
         else:
-            log.info(f'Not detecting objects in {image_source} image cached in {snapshot_path} due to feature flag or config.')
+            log.info(f'Not detecting objects in {image_source} image cached in {snapshot_path} due to feature flag {FEATURE_FLAG_OBJECT_DETECTION} or config.')
         log.info(f'Sending detection data for {device_label} to topic {publisher_topic}.')
         sink_socket.send_pyobj((publisher_topic, publisher_data))
 
@@ -900,23 +947,26 @@ def main():
     # ensure that auth is properly set up first
     google_drive_uploader = None
     google_drive_archiver = None
-    try:
-        google_drive_uploader = GoogleDriveUploader(
-            gauth_creds_file=app_config.get('gdrive', 'creds_file'),
-            gdrive_folder=app_config.get('gdrive', 'folder'))
-        google_drive_archiver = GoogleDriveArchiver(
-            gauth_creds_file=app_config.get('gdrive', 'creds_file'),
-            gdrive_folder=app_config.get('gdrive', 'folder'),
-            gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
-            gdrive_folder_url=google_drive_uploader.cloud_storage_url)
-    except HttpLib2Error:
-        log.warning('Google Drive will be unavailable until the next restart.', exc_info=True)
-        # acceptable if GDrive setup attempted first
-        google_drive_uploader = None
-        google_drive_archiver = None
-    except Exception as e:
-        die(exception=e)
-        bye()
+    if features.is_enabled(FEATURE_FLAG_CLOUD_STORAGE_MANAGEMENT):
+        try:
+            google_drive_uploader = GoogleDriveUploader(
+                gauth_creds_file=app_config.get('gdrive', 'creds_file'),
+                gdrive_folder=app_config.get('gdrive', 'folder'))
+            google_drive_archiver = GoogleDriveArchiver(
+                gauth_creds_file=app_config.get('gdrive', 'creds_file'),
+                gdrive_folder=app_config.get('gdrive', 'folder'),
+                gdrive_folder_id=google_drive_uploader.cloud_storage_folder_id,
+                gdrive_folder_url=google_drive_uploader.cloud_storage_url)
+        except HttpLib2Error:
+            log.warning('Google Drive will be unavailable until the next restart.', exc_info=True)
+            # acceptable if GDrive setup attempted first
+            google_drive_uploader = None
+            google_drive_archiver = None
+        except Exception as e:
+            die(exception=e)
+            bye()
+    else:
+        log.warn(f'Not enabling cloud storage management due to disabled feature flag {FEATURE_FLAG_CLOUD_STORAGE_MANAGEMENT}')
     # tell the uploader about the Cloud storage URL
     cloud_storage_url = None
     if google_drive_uploader:

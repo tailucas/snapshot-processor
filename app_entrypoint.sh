@@ -14,24 +14,27 @@ if [ -n "${GOOGLE_OAUTH_TOKEN:-}" ]; then
   echo "$GOOGLE_OAUTH_TOKEN" > /data/snapshot_processor_creds
 fi
 
+set -x
+
 # FTP server setup
 FTP_ROOT="/data/ftp"
 mkdir -p "${FTP_ROOT}"
 
-set -x
 # snapshot storage
 STORAGE_UPLOADS="${FTP_ROOT}/uploads"
 for dir in $(echo "${FTP_CREATE_DIRS:-}" | sed "s/,/ /g"); do
   mkdir -p "${STORAGE_UPLOADS}/${dir}"
 done
 
-cat << EOF >> /opt/app/supervisord.conf
+if [ "${RUN_FTP_SERVER:-}" == "true" ]; then
+  cat << EOF >> /opt/app/supervisord.conf
 [program:ftp]
 command=poetry run ftp
 directory=/opt/app/
 user=app
 autorestart=unexpected
 EOF
+fi
 
 # Google Refresh Token restore
 /opt/app/backup_auth_token.sh

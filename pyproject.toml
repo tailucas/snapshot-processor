@@ -29,7 +29,16 @@ cachetools = "^5.3.3"
 pydantic = "^2.7.1"
 onepasswordconnectsdk = "^1.5.1"
 unleashclient = "^5.12.2"
+torch = {version = "^2.4.0+cpu", source = "pytorch-cpu"}
+torchvision = {version = "^0.19.0+cpu", source = "pytorch-cpu"}
+ultralytics = "^8.2.73"
+opencv-python-headless = "^4.10.0.84"
 
+
+[[tool.poetry.source]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "explicit"
 
 [build-system]
 requires = ["poetry-core"]
