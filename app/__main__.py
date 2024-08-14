@@ -819,7 +819,7 @@ class ObjectDetector(ZmqRelay):
                             labels.append((label_name, label_confidence))
                             if label_name == 'person':
                                 person_count += 1
-                    log.info(f'YOLO finds {len(labels)} labels from {device_label} ({image_source}): {labels!s}')
+                    log.info(f'YOLO finds {len(labels)} labels from {device_label}: {labels!s} in {snapshot_path}')
                     if person_count > 0:
                         additional_info = f'{person_count} person(s) and {len(labels)} things'
                         event_detail = f'{device_label} ({image_source}): {additional_info}.'
