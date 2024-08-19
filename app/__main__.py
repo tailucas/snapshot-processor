@@ -796,20 +796,23 @@ class ObjectDetector(ZmqRelay):
                     person_count = 0
                     labels = list()
                     for result in results:
-                        if 'fetch' in snapshot_path:
-                            detect_filename = snapshot_path.replace('fetch', 'detect')
-                            log.info(f'Saving detection result to {detect_filename}...')
-                            try:
-                                result.save(filename=detect_filename)
-                            except Exception:
-                                log.exception(f'Unable to save detection result to {detect_filename}')
+                        person_detected = False
                         for detect_dict in result.summary():
                             log.debug(f'Local inference {detect_dict!s}')
                             label_name = detect_dict['name']
                             label_confidence = detect_dict['confidence']
                             labels.append((label_name, label_confidence))
                             if label_name == 'person':
+                                person_detected = True
                                 person_count += 1
+                        if person_detected:
+                            detect_filename = snapshot_path.replace('fetch', 'detect')
+                            log.info(f'Saving person detection result to {detect_filename}...')
+                            try:
+                                result.save(filename=detect_filename)
+                            except Exception:
+                                log.exception(f'Unable to save detection result to {detect_filename}')
+
                     log.info(f'YOLO finds {len(labels)} labels from {device_label}: {labels!s} in {snapshot_path}')
                     if person_count > 0:
                         additional_info = f'{person_count} person(s) and {len(labels)} things'
