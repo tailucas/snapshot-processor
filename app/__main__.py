@@ -110,25 +110,6 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 
-def wait_for_file_content(file_path):
-    # FIXME: small delay to ensure that file is complete and
-    # closed before attempting upload
-    if os.path.exists(file_path) and os.path.isfile(file_path):
-        sleep_delay = 5
-        max_tries = 24
-        for tries in range(1, max_tries):
-            # no content
-            if os.path.getsize(file_path) > 0:
-                break
-            # less than 5 minutes old
-            if time.time() - os.path.getmtime(file_path) > 300:
-                break
-            log.warning(f'Waiting for {sleep_delay}s (try {tries} of {max_tries}) on empty file {file_path}')
-            sleep(sleep_delay)
-            if tries >= max_tries:
-                break
-
-
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
     return os.path.join(
         parent_path,
@@ -526,8 +507,10 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                                 archived += 1
                 except StopIteration:
                     log.info(f'Archived {archived} image snapshots.')
-            except (ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
-                raise ResourceWarning(f'Google Drive problem.') from e
+            except (ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError, TimeoutError) as e:
+                log.exception(f'Google Drive problem: {e!s}. Will try again in a minute.')
+                threads.interruptable_sleep.wait(60)
+                continue
             # prevent memory leaks
             self._folder_id_cache.clear()
             # sleep until tomorrow
@@ -600,11 +583,18 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         with exception_handler(connect_url=URL_WORKER_CLOUD_STORAGE, socket_type=zmq.PULL, and_raise=False, shutdown_on_error=True) as zmq_socket:
             while not threads.shutting_down:
                 (snapshot_path, snapshot_timestamp) = zmq_socket.recv_pyobj()
-                #FIXME: remove
-                wait_for_file_content(snapshot_path)
-                self.upload(file_path=snapshot_path, created_time=snapshot_timestamp)
+                while not self.upload(file_path=snapshot_path, created_time=snapshot_timestamp):
+                    log.warning(f'Google Drive problem uploading {snapshot_path}. Will retry after delay.')
+                    threads.interruptable_sleep.wait(60)
 
     def upload(self, file_path, created_time=None):
+        # verify the snapshot
+        try:
+            with Image.open(file_path) as img:
+                img.verify()
+        except (IOError, SyntaxError) as e:
+            log.warning(f'Not uploading corrupted image file {file_path}.')
+            return True
         # upload the snapshot
         mime_type = self._filetype.mime_type(file_path)
         log.info(f"'{mime_type}' file {file_path}")
@@ -627,8 +617,9 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             })
             f.SetContentFile(file_path)
             f.Upload()
-        except (ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError) as e:
-            raise ResourceWarning(f'Google Drive problem.') from e
+        except (ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError, TimeoutError) as e:
+            log.exception(f'Google Drive problem: {e!s}')
+            return False
         link_msg = ""
         if 'thumbnailLink'in f:
             link = f['thumbnailLink']
@@ -638,6 +629,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                 link += '=s1024'
             link_msg = f" Thumbnail at {link}"
         log.info(f"Uploaded '{os.path.basename(file_path)}' to Google Drive folder '{self._gdrive_folder}' (ID: '{f['id']}').{link_msg}")
+        return True
 
 
 class UploadEventHandler(FileSystemEventHandler, Closable):
@@ -785,7 +777,6 @@ class ObjectDetector(ZmqRelay):
             image_bytes = input_device['image']
             image_source = 'fetch'
         else:
-            wait_for_file_content(snapshot_path)
             with open(snapshot_path, 'rb') as img_file:
                 image_bytes = img_file.read()
             image_source = 'upload'
