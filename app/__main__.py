@@ -508,7 +508,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                 except StopIteration:
                     log.info(f'Archived {archived} image snapshots.')
             except (ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError, TimeoutError) as e:
-                log.exception(f'Google Drive problem: {e!s}. Will try again in a minute.')
+                log.exception(f'Google Drive problem archiving files in {self._gdrive_folder} ({self._gdrive_folder_id}) {e!s}. Will try again in a minute.')
                 threads.interruptable_sleep.wait(60)
                 continue
             # prevent memory leaks
@@ -584,8 +584,8 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             while not threads.shutting_down:
                 (snapshot_path, snapshot_timestamp) = zmq_socket.recv_pyobj()
                 while not self.upload(file_path=snapshot_path, created_time=snapshot_timestamp):
-                    log.warning(f'Google Drive problem uploading {snapshot_path}. Will retry after delay.')
-                    threads.interruptable_sleep.wait(60)
+                    # never spin
+                    threads.interruptable_sleep.wait(1)
 
     def upload(self, file_path, created_time=None):
         # verify the snapshot
@@ -618,7 +618,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             f.SetContentFile(file_path)
             f.Upload()
         except (ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_error, HttpError, SSLEOFError, TimeoutError) as e:
-            log.exception(f'Google Drive problem: {e!s}')
+            log.exception(f'Google Drive problem uploading {file_path}: {e!s}')
             return False
         link_msg = ""
         if 'thumbnailLink'in f:
