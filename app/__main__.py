@@ -32,7 +32,7 @@ from socket import error as socket_error
 from ssl import SSLEOFError
 from time import sleep
 from urllib.request import pathname2url
-from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileMovedEvent
+from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileMovedEvent, FileClosedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated, ZMQError
 from PIL import Image
@@ -647,6 +647,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         self._cloud_storage_url = None
 
         self._mq_device_topic = mq_device_topic
+        self._path_cache = LRUCache(maxsize=128)
 
     def start(self):
         # start the file system monitor
@@ -690,18 +691,29 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
     # if a snapshot is renamed after object detection
     def on_moved(self, event):
         if isinstance(event, FileMovedEvent):
+            log.info(f'File moved event: from {event.src_path} to {event.dest_path}')
             self.on_fs_event(snapshot_path=event.dest_path)
+
+    # if a snapshot has been fully written
+    def on_closed(self, event):
+        if isinstance(event, FileClosedEvent):
+            log.info(f'File closed event: {event.src_path}')
 
     # we listen to on-modified events because the file is
     # created and then written to subsequently.
     def on_modified(self, event):
         if isinstance(event, FileModifiedEvent):
+            log.info(f'File modified event: {event.src_path}')
             self.on_fs_event(snapshot_path=event.src_path)
 
     def on_fs_event(self, snapshot_path: str):
         if threads.shutting_down:
             log.warning(f'Ignoring file system event {snapshot_path} due to shutdown.')
             return
+        if snapshot_path in self._path_cache:
+            log.warning(f'{snapshot_path} already processed.')
+            return
+        self._path_cache[snapshot_path] = True
         # cross-check that we're in the right place
         if not snapshot_path.startswith(self._snapshot_root):
             log.warning(f'Ignored unmapped path event: {snapshot_path}')
