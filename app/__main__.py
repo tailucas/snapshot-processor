@@ -688,16 +688,19 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
     def watched_dirs(self):
         return list(self.device_events.keys())
 
+    # if a snapshot is renamed after object detection
+    def on_moved(self, event):
+        self.on_fs_event(event)
+
     # we listen to on-modified events because the file is
     # created and then written to subsequently.
     def on_modified(self, event):
+        self.on_fs_event(event)
+
+    def on_fs_event(self, event):
         if threads.shutting_down:
             log.warning(f'Ignoring file system event {event} due to shutdown.')
             return
-        """
-        :type event: FileModifiedEvent
-        """
-        super(UploadEventHandler, self).on_modified(event)
         # the file has been written to and has valid content
         if not event.is_directory:
             snapshot_path = event.src_path
