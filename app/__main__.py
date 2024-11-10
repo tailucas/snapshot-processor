@@ -7,15 +7,13 @@ import builtins
 import copy
 import json
 import os
-import pytz
 import requests
 import threading
-import time
 import zmq
 
 from abc import abstractmethod, ABCMeta
 from cachetools import LRUCache
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.client import BadStatusLine, IncompleteRead
 from httplib2.error import HttpLib2Error
 from io import BytesIO
@@ -518,7 +516,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
 
     def archive(self, gdrive, gdrive_file, root_folder_id):
         filename = gdrive_file['title']
-        now = datetime.utcnow().replace(tzinfo=pytz.utc)
+        now = datetime.now(tz=timezone.utc)
         created_date = dateutil.parser.parse(gdrive_file['createdDate'])
         td = now - created_date
         if td > timedelta(days=1):
