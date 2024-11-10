@@ -32,7 +32,7 @@ from socket import error as socket_error
 from ssl import SSLEOFError
 from time import sleep
 from urllib.request import pathname2url
-from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileMovedEvent
 from watchdog.observers import Observer
 from zmq import ContextTerminated, ZMQError
 from PIL import Image
@@ -639,7 +639,6 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         FileSystemEventHandler.__init__(self)
         Closable.__init__(self, connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH)
 
-        self.last_modified = None
         self.device_events = dict()
         self._snapshot_root = snapshot_root
 
@@ -690,64 +689,60 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
 
     # if a snapshot is renamed after object detection
     def on_moved(self, event):
-        self.on_fs_event(event)
+        if isinstance(event, FileMovedEvent):
+            self.on_fs_event(snapshot_path=event.dest_path)
 
     # we listen to on-modified events because the file is
     # created and then written to subsequently.
     def on_modified(self, event):
-        self.on_fs_event(event)
+        if isinstance(event, FileModifiedEvent):
+            self.on_fs_event(snapshot_path=event.src_path)
 
-    def on_fs_event(self, event):
+    def on_fs_event(self, snapshot_path: str):
         if threads.shutting_down:
-            log.warning(f'Ignoring file system event {event} due to shutdown.')
+            log.warning(f'Ignoring file system event {snapshot_path} due to shutdown.')
             return
-        # the file has been written to and has valid content
-        if not event.is_directory:
-            snapshot_path = event.src_path
-            # de-duplication
-            if snapshot_path != self.last_modified:
-                self.last_modified = snapshot_path
-            else:
-                return
-            # cross-check that we're in the right place
-            if snapshot_path.startswith(self._snapshot_root):
-                # image snapshot that can be mapped to a device?
-                device_event = self._get_device_event(snapshot_path)
-                if device_event:
-                    log.info(f'{device_event} from {snapshot_path}')
-                    file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
-                    if '_' in file_base_name:
-                        # keep in sync with invocations of create_snapshot_path
-                        date_string = ' '.join(file_base_name.split('_')[2:])
-                    else:
-                        date_string = file_base_name
-                    device_event.timestamp = date_string
-                    # do not notify again for fetched image data
-                    if 'fetch' not in snapshot_path and 'detect' not in snapshot_path and 'human' not in snapshot_path:
-                        unix_timestamp = int((device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
-                        publisher_data = create_publisher_struct(
-                            device_key=device_event['device_key'],
-                            device_label=device_event['device_label'],
-                            image_data=device_event['image_data'],
-                            image_timestamp=unix_timestamp,
-                            storage_url=self._cloud_storage_url,
-                            storage_path=snapshot_path)
-                        # start processing the image data
-                        if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
-                            self.socket.send_pyobj((
-                                f'event.notify.{self._mq_device_topic}.{device_name}',
-                                publisher_data
-                            ))
-                    else:
-                        log.info(f'Not generating redundant snapshot event for {snapshot_path}.')
-                    log.info(f'Uploading {snapshot_path} to cloud storage based on file system event ({date_string}).')
-                    # upload the image snapshot to Cloud
-                    self.cloud_storage_socket.send_pyobj((
-                        snapshot_path,
-                        device_event.timestamp
-                    ))
-                else:
-                    log.warning(f'Ignored unmapped path event: {snapshot_path}')
+        # cross-check that we're in the right place
+        if not snapshot_path.startswith(self._snapshot_root):
+            log.warning(f'Ignored unmapped path event: {snapshot_path}')
+            return
+        # image snapshot that can be mapped to a device?
+        device_event = self._get_device_event(snapshot_path)
+        if device_event is None:
+            log.warning(f'No device mapping from path: {snapshot_path}')
+            return
+        log.info(f'{device_event} from {snapshot_path}')
+        file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
+        if '_' in file_base_name:
+            # keep in sync with invocations of create_snapshot_path
+            date_string = ' '.join(file_base_name.split('_')[2:])
+        else:
+            date_string = file_base_name
+        device_event.timestamp = date_string
+        # do not notify again for fetched image data
+        if 'fetch' not in snapshot_path and 'detect' not in snapshot_path and 'human' not in snapshot_path:
+            unix_timestamp = int((device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
+            publisher_data = create_publisher_struct(
+                device_key=device_event['device_key'],
+                device_label=device_event['device_label'],
+                image_data=device_event['image_data'],
+                image_timestamp=unix_timestamp,
+                storage_url=self._cloud_storage_url,
+                storage_path=snapshot_path)
+            # start processing the image data
+            if file_base_name.endswith('.jpg') and 'object' not in snapshot_path:
+                self.socket.send_pyobj((
+                    f'event.notify.{self._mq_device_topic}.{device_name}',
+                    publisher_data
+                ))
+        else:
+            log.info(f'Not generating redundant snapshot event for {snapshot_path}.')
+        log.info(f'Uploading {snapshot_path} to cloud storage based on file system event ({date_string}).')
+        # upload the image snapshot to Cloud
+        self.cloud_storage_socket.send_pyobj((
+            snapshot_path,
+            device_event.timestamp
+        ))
 
 
 class ObjectDetector(ZmqRelay):
