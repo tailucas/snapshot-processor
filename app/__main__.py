@@ -581,6 +581,9 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         with exception_handler(connect_url=URL_WORKER_CLOUD_STORAGE, socket_type=zmq.PULL, and_raise=False, shutdown_on_error=True) as zmq_socket:
             while not threads.shutting_down:
                 (snapshot_path, snapshot_timestamp) = zmq_socket.recv_pyobj()
+                if 'fetch' in snapshot_path:
+                    log.warning(f'Not uploading {snapshot_path}.')
+                    continue
                 while not self.upload(file_path=snapshot_path, created_time=snapshot_timestamp):
                     # never spin
                     threads.interruptable_sleep.wait(1)
@@ -716,8 +719,8 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                     else:
                         date_string = file_base_name
                     device_event.timestamp = date_string
-                    # do not notify for fetched image data
-                    if 'fetch' not in snapshot_path and 'detect' not in snapshot_path:
+                    # do not notify again for fetched image data
+                    if 'fetch' not in snapshot_path and 'detect' not in snapshot_path and 'human' not in snapshot_path:
                         unix_timestamp = int((device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                         publisher_data = create_publisher_struct(
                             device_key=device_event['device_key'],
@@ -732,6 +735,9 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                                 f'event.notify.{self._mq_device_topic}.{device_name}',
                                 publisher_data
                             ))
+                    else:
+                        log.info(f'Not generating redundant snapshot event for {snapshot_path}.')
+                    log.info(f'Uploading {snapshot_path} to cloud storage based on file system event ({date_string}).')
                     # upload the image snapshot to Cloud
                     self.cloud_storage_socket.send_pyobj((
                         snapshot_path,
@@ -753,6 +759,7 @@ class ObjectDetector(ZmqRelay):
         self._rekog = None
         self._path_cache = LRUCache(maxsize=128)
         self._local_model = None
+        self._minimum_human_confidence = app_config.getfloat('human_detection', 'minimum_confidence')
 
     def startup(self):
         self._rekog = boto3.client('rekognition', region_name=app_config.get('rekognition', 'region'))
@@ -798,9 +805,9 @@ class ObjectDetector(ZmqRelay):
                         for detect_dict in result.summary():
                             log.debug(f'Local inference {detect_dict!s}')
                             label_name = detect_dict['name']
-                            label_confidence = detect_dict['confidence']
+                            label_confidence = float(detect_dict['confidence'])
                             labels.append((label_name, label_confidence))
-                            if label_name == 'person':
+                            if label_name == 'person' and label_confidence >= self._minimum_human_confidence:
                                 person_detected = True
                                 person_count += 1
                         if person_detected:
@@ -810,7 +817,9 @@ class ObjectDetector(ZmqRelay):
                                 result.save(filename=detect_filename)
                             except Exception:
                                 log.exception(f'Unable to save detection result to {detect_filename}')
-
+                            human_detect_filename = snapshot_path.replace('fetch', 'human')
+                            log.info(f'Renaming {snapshot_path} to {human_detect_filename}...')
+                            os.rename(snapshot_path, human_detect_filename)
                     log.info(f'YOLO finds {len(labels)} labels from {device_label}: {labels!s} in {snapshot_path}')
                     if person_count > 0:
                         additional_info = f'{person_count} person(s) and {len(labels)} things'
@@ -828,15 +837,18 @@ class ObjectDetector(ZmqRelay):
                     if 'Labels' in response:
                         for detect_dict in response['Labels']:
                             label_name = detect_dict['Name']
-                            label_confidence = detect_dict['Confidence']
+                            label_confidence = float(detect_dict['Confidence'])
                             labels.append((label_name, label_confidence))
-                            if label_name == 'Person':
+                            if label_name == 'Person' and label_confidence >= self._minimum_human_confidence:
                                 # if instances are provided, sum them
                                 num_instances = len(detect_dict['Instances'])
                                 if num_instances > 0:
                                     person_count += num_instances
                                 else:
                                     person_count += 1
+                                human_detect_filename = snapshot_path.replace('fetch', 'human')
+                                log.info(f'Renaming {snapshot_path} to {human_detect_filename}...')
+                                os.rename(snapshot_path, human_detect_filename)
                         log.info(f'Rekognition finds {len(labels)} labels from {device_label} ({image_source}): {labels!s}')
                     if person_count > 0:
                         additional_info = f'{person_count} person(s) and {len(labels)} things'
