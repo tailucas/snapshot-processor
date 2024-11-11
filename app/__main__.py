@@ -598,7 +598,8 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             return True
         # upload the snapshot
         mime_type = self._filetype.mime_type(file_path)
-        log.info(f"'{mime_type}' file {file_path}")
+        file_size = os.path.getsize(filename=file_path)
+        log.info(f"'{mime_type}' file {file_path} ({file_size} bytes)")
         created_date = None
         if created_time is None:
             log.debug(f"Uploading '{file_path}' to Google Drive")
@@ -609,9 +610,10 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             offset = created_time.strftime('%z')
             created_date = created_time.strftime('%Y-%m-%dT%H:%M:%S.00') + offset[:3] + ':' + offset[3:]
             log.debug(f"Uploading '{file_path}' to Google Drive with created time of {created_date}")
+        file_base_name = os.path.basename(file_path)
         try:
             f = self.drive.CreateFile({
-                'title': os.path.basename(file_path),
+                'title': file_base_name,
                 'mimeType': mime_type,
                 'createdDate': created_date,
                 'parents': [{"kind": "drive#fileLink", "id": self._gdrive_folder_id}]
@@ -629,7 +631,15 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                 link = link.rsplit('=')[0]
                 link += '=s1024'
             link_msg = f" Thumbnail at {link}"
-        log.info(f"Uploaded '{os.path.basename(file_path)}' to Google Drive folder '{self._gdrive_folder}' (ID: '{f['id']}').{link_msg}")
+        upload_file_id = f['id']
+        log.info(f'Uploaded {file_base_name} ({upload_file_id}) to Google Drive folder {self._gdrive_folder}.{link_msg}')
+        if 'size' in f:
+            upload_size = int(f['size'])
+            if upload_size < file_size:
+                log.warning(f'File {file_base_name} ({upload_file_id}) size mismatch (expected {file_size} bytes, uploaded {upload_size} bytes).')
+                return False
+        else:
+            log.warning(f'File {file_base_name} ({upload_file_id}) does not contain file size information.')
         return True
 
 
