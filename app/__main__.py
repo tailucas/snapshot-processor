@@ -639,7 +639,8 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                 log.warning(f'File {file_base_name} ({upload_file_id}) size mismatch (expected {file_size} bytes, uploaded {upload_size} bytes).')
                 return False
         else:
-            log.warning(f'File {file_base_name} ({upload_file_id}) does not contain file size information.')
+            f_keys = f.keys()
+            log.warning(f'File {file_base_name} ({upload_file_id}) does not contain file size information ({f_keys!s}).')
         return True
 
 
