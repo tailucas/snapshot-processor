@@ -5,6 +5,7 @@ import logging.handlers
 import boto3
 import builtins
 import copy
+import hashlib
 import json
 import os
 import requests
@@ -633,14 +634,30 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             link_msg = f" Thumbnail at {link}"
         upload_file_id = f['id']
         log.info(f'Uploaded {file_base_name} ({upload_file_id}) to Google Drive folder {self._gdrive_folder}.{link_msg}')
-        if 'size' in f:
-            upload_size = int(f['size'])
-            if upload_size < file_size:
+        remove_upload = False
+        if 'fileSize' in f:
+            upload_size = int(f['fileSize'])
+            if upload_size != file_size:
                 log.warning(f'File {file_base_name} ({upload_file_id}) size mismatch (expected {file_size} bytes, uploaded {upload_size} bytes).')
-                return False
-        else:
-            f_keys = f.keys()
-            log.warning(f'File {file_base_name} ({upload_file_id}) does not contain file size information ({f_keys!s}).')
+                remove_upload = True
+            else:
+                # checksum files if sizes are the same
+                file_checksum = None
+                with open(file_path, 'rb') as file_content:
+                    data = file_content.read()
+                    file_checksum = hashlib.md5(data).hexdigest()
+                if 'md5Checksum' in f:
+                    upload_checksum = f['md5Checksum']
+                    log.info(f'{file_base_name}: Source/Upload checksum is {file_checksum}/{upload_checksum}.')
+                    if file_checksum and file_checksum != upload_checksum:
+                        log.warning(f'File {file_base_name} ({upload_file_id}) checksum mismatch (expected {file_checksum}, uploaded {upload_checksum}).')
+                        remove_upload = True
+        if remove_upload:
+            log.info(f'Deleting {file_base_name} ({upload_file_id}) from Google Drive folder {self._gdrive_folder}...')
+            f.Delete()
+            # and retry the upload
+            return False
+        # all good, treat as done
         return True
 
 
