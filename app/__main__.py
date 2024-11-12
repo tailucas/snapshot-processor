@@ -641,6 +641,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                 log.warning(f'File {file_base_name} ({upload_file_id}) size mismatch (expected {file_size} bytes, uploaded {upload_size} bytes).')
                 remove_upload = True
             else:
+                log.info(f'{file_base_name}: Upload file size matches ({file_size} bytes). Validating checksum...')
                 # checksum files if sizes are the same
                 file_checksum = None
                 with open(file_path, 'rb') as file_content:
@@ -648,13 +649,16 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                     file_checksum = hashlib.md5(data).hexdigest()
                 if 'md5Checksum' in f:
                     upload_checksum = f['md5Checksum']
-                    log.info(f'{file_base_name}: Source/Upload checksum is {file_checksum}/{upload_checksum}.')
-                    if file_checksum and file_checksum != upload_checksum:
-                        log.warning(f'File {file_base_name} ({upload_file_id}) checksum mismatch (expected {file_checksum}, uploaded {upload_checksum}).')
-                        remove_upload = True
+                    log.debug(f'{file_base_name}: Source/Upload checksum is {file_checksum}/{upload_checksum}.')
+                    if file_checksum:
+                        if file_checksum == upload_checksum:
+                            log.info(f'{file_base_name}: Upload checksum matches {file_checksum}.')
+                        else:
+                            log.warning(f'File {file_base_name} ({upload_file_id}) checksum mismatch (expected {file_checksum}, uploaded {upload_checksum}).')
+                            remove_upload = True
         if remove_upload:
-            log.info(f'Deleting {file_base_name} ({upload_file_id}) from Google Drive folder {self._gdrive_folder}...')
-            f.Delete()
+            log.info(f'Trashing {file_base_name} ({upload_file_id}) from Google Drive folder {self._gdrive_folder}...')
+            f.Trash()
             # and retry the upload
             return False
         # all good, treat as done
