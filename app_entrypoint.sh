@@ -3,7 +3,7 @@ set -eu
 set -o pipefail
 
 # client details
-echo '{"s": {"opitem": "Google", "opfield": "oath.client_secret"}}' | poetry run /opt/app/cred_tool > /opt/app/client_secrets.json
+echo 'Google/oath/client_secret' | uv run cred_tool > /opt/app/client_secrets.json
 [ -e /opt/app/client_secrets.json ] && grep -q '[^[:space:]]' /opt/app/client_secrets.json
 if test "$(jq type /opt/app/client_secrets.json | tr -d '"')" != "object"; then
   echo "Invalid JSON /opt/app/client_secrets.json"
@@ -29,7 +29,7 @@ done
 if [ "${RUN_FTP_SERVER:-}" == "true" ]; then
   cat << EOF >> /opt/app/supervisord.conf
 [program:ftp]
-command=poetry run ftp
+command=uv run ftp
 directory=/opt/app/
 user=app
 autorestart=unexpected

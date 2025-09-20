@@ -1,44 +1,32 @@
-[tool.poetry]
+[project]
 name = "app"
 version = "0.1.0"
-description = ""
-authors = ["Tai Lucas <tglucas@gmail.com>"]
-license = "MIT"
+description = "Snapshot Processor applications"
 readme = "README.md"
-
-[tool.poetry.scripts]
-app = "app.__main__:main"
-ftp = "app.ftp_server:main"
-
-[tool.poetry.dependencies]
-python = "^3.11"
-awscli = "^1.32.94"
-boto3 = "^1.34.94"
-pika = "^1.3.2"
-python-dateutil = "^2.9.0.post0"
-pillow = "^10.3.0"
-pyzmq = "^26.0.2"
-pydrive = "^1.3.1"
-pyftpdlib = "^1.5.9"
-requests = "^2.31.0"
-sentry-sdk = "^2.0.1"
-watchdog = "^4.0.0"
-tailucas-pylib = "^0.4.0"
-cachetools = "^5.3.3"
-pydantic = "^2.7.1"
-onepasswordconnectsdk = "^1.5.1"
-unleashclient = "^5.12.2"
-torch = {version = "^2.4.0+cpu", source = "pytorch-cpu"}
-torchvision = {version = "^0.19.0+cpu", source = "pytorch-cpu"}
-ultralytics = "^8.2.73"
-opencv-python-headless = "^4.10.0.84"
-
-
-[[tool.poetry.source]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-priority = "explicit"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Tai Lucas", email = "tglucas@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "awscli>=1.42.35",
+    "cachetools>=6.2.0",
+    "pydrive>=1.3.1",
+    "pyftpdlib>=2.0.1",
+    "tailucas-pylib>=0.5.6",
+    "watchdog>=6.0.0",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.8.14,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "app"
+module-root = ""
+
+[project.scripts]
+aws_configure = "tailucas_pylib.tools.aws_configure:main"
+config_interpol = "tailucas_pylib.tools.config_interpol:main"
+cred_tool = "tailucas_pylib.tools.cred_tool:main"
+yaml_interpol = "tailucas_pylib.tools.yaml_interpol:main"

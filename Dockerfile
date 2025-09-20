@@ -3,13 +3,11 @@ FROM tailucas/base-app:latest
 USER root
 # generate correct locales
 ARG LANG
-ENV LANG ${LANG}
 ARG LANGUAGE
-ENV LANGUAGE ${LANGUAGE}
-ARG LC_ALL
-ENV LC_ALL ${LC_ALL}
-ARG ENCODING
-RUN localedef -i ${LANGUAGE} -c -f ${ENCODING} -A /usr/share/locale/locale.alias ${LANG}
+RUN locale-gen ${LANGUAGE} \
+    && locale-gen ${LANG} \
+    && update-locale \
+    && locale -a
 # user scripts
 COPY backup_auth_token.sh .
 # cron jobs
@@ -22,8 +20,14 @@ RUN /opt/app/app_setup.sh
 USER app
 COPY config ./config
 COPY settings.yaml .
-COPY poetry.lock pyproject.toml ./
+COPY uv.lock pyproject.toml .python-version ./
 RUN /opt/app/python_setup.sh
+# https://docs.ultralytics.com/quickstart/#custom-installation-methods
+# https://docs.astral.sh/uv/guides/integration/pytorch/#configuring-accelerators-with-optional-dependencies
+RUN uv pip install ultralytics --no-deps && \
+  uv pip install opencv-python-headless && \
+  uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+  uv pip install numpy matplotlib polars pyyaml pillow psutil requests scipy ultralytics-thop
 # add the project application
 COPY app/__main__.py ./app/
 COPY app/ftp_server.py ./app/

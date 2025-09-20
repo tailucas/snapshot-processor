@@ -53,7 +53,6 @@ Technologies that help make this project useful:
 [![Docker][docker-shield]][docker-url]
 [![Google Drive][gdrive-shield]][gdrive-url]
 [![RabbitMQ][rabbit-shield]][rabbit-url]
-[![Poetry][poetry-shield]][poetry-url]
 [![Python][python-shield]][python-url]
 [![Sentry][sentry-shield]][sentry-url]
 [![ZeroMQ][zmq-shield]][zmq-url]
@@ -74,7 +73,7 @@ Here is some detail about the intended use of this package.
 
 ### Prerequisites
 
-Beyond the Python dependencies defined in the [Poetry configuration](pyproject.toml), the project carries hardcoded dependencies on [Sentry][sentry-url] and [1Password][1p-url] in order to function.
+Beyond the Python dependencies defined in the [configuration](pyproject.toml), the project carries hardcoded dependencies on [Sentry][sentry-url] and [1Password][1p-url] in order to function.
 
 ### Installation
 
@@ -212,8 +211,6 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
 [gdrive-shield]: https://img.shields.io/static/v1?style=for-the-badge&message=Google+Drive&color=4285F4&logo=Google+Drive&logoColor=FFFFFF&label=
 [gdrive-url]: https://pythonhosted.org/PyDrive/
 [healthchecks-url]: https://healthchecks.io/
-[poetry-url]: https://python-poetry.org/
-[poetry-shield]: https://img.shields.io/static/v1?style=for-the-badge&message=Poetry&color=60A5FA&logo=Poetry&logoColor=FFFFFF&label=
 [pyftp-url]: https://pypi.org/project/pyftpdlib/
 [python-url]: https://www.python.org/
 [python-shield]: https://img.shields.io/static/v1?style=for-the-badge&message=Python&color=3776AB&logo=Python&logoColor=FFFFFF&label=
