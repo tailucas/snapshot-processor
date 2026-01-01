@@ -15,13 +15,14 @@ RUN rm -f ./config/cron/base_job
 COPY config/cron/backup_auth_token ./config/cron/
 COPY config/cron/cleanup_snapshots ./config/cron/
 # apply override
-RUN /opt/app/app_setup.sh
-# switch to user
-USER app
+RUN "${APP_DIR}/app_setup.sh"
 COPY config ./config
 COPY settings.yaml .
 COPY uv.lock pyproject.toml .python-version ./
-RUN /opt/app/python_setup.sh
+RUN chown app:app uv.lock
+# switch to user
+USER app
+RUN "${APP_DIR}/python_setup.sh"
 # https://docs.ultralytics.com/quickstart/#custom-installation-methods
 # https://docs.astral.sh/uv/guides/integration/pytorch/#configuring-accelerators-with-optional-dependencies
 RUN uv pip install ultralytics --no-deps && \
