@@ -332,7 +332,11 @@ class Snapshot(ZmqRelay):
             )
             log.info(f"Saving {device_label} image data to {output_filename}...")
             # persist for Cloud
-            im.save(output_filename)
+            try:
+                im.save(output_filename)
+            except OSError as e:
+                log.exception(f"Problem saving image to {output_filename}: {e!s}")
+                die(e)
 
 
 class DeviceEvent(object):
