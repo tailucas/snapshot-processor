@@ -34,7 +34,7 @@ from pydrive.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException, Timeout
-from socket import error as socket_error
+from socket import error as socket_error, gaierror as socket_gaierror
 from ssl import SSLEOFError
 from time import sleep
 from ultralytics import YOLO
@@ -532,6 +532,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                 BrokenPipeError,
                 FileNotUploadedError,
                 socket_error,
+                socket_gaierror,
                 HttpError,
                 SSLEOFError,
                 TimeoutError,
