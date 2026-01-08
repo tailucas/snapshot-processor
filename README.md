@@ -12,35 +12,82 @@
 
 **Note 1**: See my write-up on [Home Security Automation][blog-url] which provides an architectural overview of how this project works with others in my collection.
 
-**Note 2**: While I use the word *Automation* in these projects, there is no integration with sensible frameworks like [openHAB][oh-url] or [Home Assistant][ha-url]... not yet at least. The goal behind this project was a learning opportunity by employing some specific technologies and opinion on design. The parts you'll most likely find useful are touch-points with third-party libraries like Flask, ZeroMQ and RabbitMQ, because seamless behavior comes after much trial and error.
+**Note 2**: While I use the word *Automation* in these projects, there is no integration with sensible frameworks like [openHAB][oh-url] or [Home Assistant][ha-url]... not yet at least. The goal behind this project was a learning opportunity by employing specific technologies and design patterns. The parts most likely to be useful are integrations with libraries like ZeroMQ, RabbitMQ, and cloud storage, where seamless behavior comes after much trial and error.
 
-This project supports fetching image snapshots from [Foscam][foscam-url] [IP cameras](https://duckduckgo.com/?q=ip+camera&t=h_&ia=web) and forwards this data to companion projects using a [RabbitMQ][rabbit-url] exchange. Most IP cameras will have varying degrees of "documented" methods to fetch image data on-demand. My use of Foscam is really based on the hardware that I currently use (at the time of writing, some of their web sites appear broken :shrug:).
+### Core Functionality
 
-Additional features include:
+This project is a **sophisticated snapshot processor** that fetches image snapshots from IP cameras (particularly [Foscam][foscam-url]) and orchestrates multi-threaded image processing pipelines. It extends [base-app][baseapp-url] with GitHub repository at https://github.com/tailucas/base-app, and takes a git submodule dependency on [pylib][pylib-url].
 
-* a self-managed local cache of snapshot images which are asynchronously uploaded to `CloudStorage` instances which currently includes Google Drive.
-* periodic management of Google Driver folders by organizing non-starred images into year-month-day folders.
-* a local FTP server to support FTP-based IP camera image push using FTP basic-auth.
-* object detection using [AWS Rekognition][awsr-url] with metadata-flags for human detection.
+**Key Features:**
 
-This application extends my own [boilerplate application][baseapp-url] hosted in [docker hub][baseapp-image-url] and takes its own git submodule dependency on my own [package][pylib-url].
+* **IP Camera Integration**: Supports fetching snapshots from Foscam and other IP cameras via HTTP
+* **Message-Driven Architecture**: Routes snapshots through [RabbitMQ][rabbit-url] exchange for multi-device coordination
+* **Multiple Object Detection Engines** (feature flags):
+  - **AWS Rekognition** (cloud-based): Fast, accurate human/object detection with metadata
+  - **YOLOv8** (local): On-device object detection using PyTorch/Ultralytics for privacy/cost
+* **Cloud Storage Integration**: Asynchronous uploads to Google Drive with automatic organization
+* **Google Drive Management**: Periodic archival of snapshots into year-month-day folder structure, excluding starred images
+* **Local FTP Server**: FTP-based snapshot push support with basic authentication for IP cameras
+* **File System Watching**: Watchdog-based file system observer to detect new snapshots
+* **Image Caching**: LRU cache for snapshot image data to optimize processing
+* **AWS Integration**: Rekognition for object detection, CloudWatch metrics posting
+* **Resilient Message Handling**: Multi-threaded ZeroMQ relay architecture with error recovery
 
-There are also a [few branches](https://github.com/tailucas/snapshot-processor/branches) of this project, made for various platforms, one of which was to support the [Jetson Nano](https://developer.nvidia.com/embedded/jetson-nano-developer-kit) developer kit. This branch includes logic to control the PWM fan to run when detection is being done. The results weren't perfect so if you do intend to fork this branch, your mileage may vary. The main branch of this project works with [AWS Rekognition][awsr-url] and I've found it to be fast, rather accurate and returns useful metadata for person detection. The current logic makes use of the `DetectLabels` feature and carries associated [pricing](https://aws.amazon.com/rekognition/pricing/).
+**Platform Variants:**
+- **Main branch**: Uses [AWS Rekognition][awsr-url] for cloud-based object detection (fast, accurate, priced per-image)
+- **Jetson Nano branch**: Includes PWM fan control and local YOLOv8 detection (for edge devices)
 
-### Package Structure
+Detection results include human/person confidence scores and detailed metadata for automation decision-making.
 
-The diagrams below show both the class inheritance structure. Here is the relationship between this project and my [pylib][pylib-url] submodule. For brevity, not everything is included such as the cloud storage management classes, but those are mostly self-contained. These are the non-obvious relationships.
+### Architecture & Design
 
-![classes](/../../../../tailucas/tailucas.github.io/blob/main/assets/snapshot-processor/snapshot-processor_classes.png)
+This 1277-line Python application demonstrates patterns for building asynchronous, multi-threaded image processing pipelines.
 
-* `Snapshot` receives trigger messages and fetches image data from cameras and forwards this to `ObjectDetector` which delegates to the chosen detection mechanism to identify features in the images. Both of these are descendants of `ZMQRelay` for inter-thread message passing. You can see this flow illustrated in the diagram below.
-* The `main` application thread contains an instance of `ZMQListener` which receives messages from the configured exchange and forwards them to `Snapshot`. After object detection, outgoing messages are sent via `RabbitMQRelay`.
+**Core Components** (`app/__main__.py`):
 
-See the diagram below for an example about how ZeroMQ is [used](https://github.com/tailucas/pylib/blob/ac05d39592c2264143ec4a37fe76b7e0369515bd/pylib/app.py#L26) as a message relay between threads.
+* **`CameraConfig`** (line 113): Configuration holder for camera parameters including snapshot URL, authentication, and image format
+* **`FileType`**: Enumeration for file handling types (SNAPSHOT, ARCHIVE, etc.)
+* **`Snapshot`** (line 204): Main snapshot fetching thread extending `ZmqRelay`. Receives camera trigger events, fetches images from HTTP endpoints, caches locally, and relays to object detection
+* **`DeviceEvent`** (line 342): Message wrapper for device input/output events with metadata (device ID, location, type, timestamp)
+* **`CloudStorage`** (line 402): Abstract base class for cloud storage implementations
+* **`GoogleDriveManager`** (line 408): Base class for Google Drive operations with OAuth token management
+* **`GoogleDriveArchiver`** (line 490): Background thread for organizing Google Drive snapshots into year-month-day folders, skipping starred images
+* **`GoogleDriveUploader`** (line 621): Async uploader for locally cached snapshots to Google Drive with queue management and retry logic
+* **`UploadEventHandler`** (line 765): File system event handler (watchdog) for detecting new local snapshots
+* **`ObjectDetector`** (line 902): Multi-detector abstraction supporting both AWS Rekognition and local YOLOv8 detection
+* **`FTPServer`** (separate file): Implements FTP server for camera image push with user authentication and event logging
 
-![comms](/../../../../tailucas/tailucas.github.io/blob/main/assets/snapshot-processor/snapshot-processor_zmq-sockets.png)
+**Message Flow:**
+1. Device event arrives via RabbitMQ → triggers `Snapshot` to fetch image
+2. `Snapshot` fetches from camera HTTP endpoint, caches locally, relays to `ObjectDetector`
+3. `ObjectDetector` processes (cloud or local) and returns detection results
+4. Results sent back through RabbitMQ to other devices
+5. `GoogleDriveUploader` asynchronously uploads cache to Google Drive
+6. `GoogleDriveArchiver` periodically organizes Drive folders
 
-* `ZMQListener` is responsible for receiving RabbitMQ messages from the network and then forwards these through a chain of `ZMQRelay` instances out the way back to the RabbitMQ publisher.
+**Configuration:**
+- 8 configurable camera inputs (`INPUT_1` to `INPUT_8`)
+- 8 configurable device outputs (`OUTPUT_1` to `OUTPUT_8`)
+- Location-based device labeling
+- Feature flags for object detection, cloud detection, local detection, storage management
+
+**Technology Patterns:**
+
+The application demonstrates professional integration patterns:
+- **ZeroMQ**: Thread-safe inter-component messaging with relay pattern
+- **RabbitMQ**: External device messaging queue
+- **PyDrive**: Google Drive OAuth authentication and file management
+- **Watchdog**: File system event monitoring for uploads
+- **AWS Rekognition**: Cloud-based object/human detection (paid)
+- **YOLOv8 + PyTorch**: Local neural network detection (free, privacy-focused)
+- **Pillow**: Image manipulation and validation
+- **Cachetools**: LRU image caching for efficient memory use
+- **pyftpdlib**: FTP server for camera integrations
+- **boto3**: AWS SDK for metrics and authentication
+- **Sentry SDK**: Production error tracking with threading integration
+- **tailucas-pylib**: Shared architectural patterns and utilities
+
+See [tailucas-pylib][pylib-url] for shared patterns and base-app for the container foundation.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -73,90 +120,327 @@ Here is some detail about the intended use of this package.
 
 ### Prerequisites
 
-Beyond the Python dependencies defined in the [configuration](pyproject.toml), the project carries hardcoded dependencies on [Sentry][sentry-url] and [1Password][1p-url] in order to function.
+Beyond the Python dependencies defined in [pyproject.toml](pyproject.toml), the project requires:
+
+* **[1Password Secrets Automation][1p-url]**: Runtime credential and configuration management (paid service with free tier)
+* **[Sentry][sentry-url]**: Error tracking and monitoring (free tier available)
+* **[RabbitMQ][rabbit-url]**: Message broker for device communication (self-hosted or managed service)
+* **[Google Drive API][gdrive-url]**: Cloud snapshot storage and organization (free tier available)
+* **[AWS Rekognition][awsr-url]**: Cloud object detection (optional, paid per-image)
+* **IP Cameras**: Foscam or similar HTTP-based snapshot API (for fetching images)
+
+Optional services:
+* **Jetson Nano**: For local YOLOv8 detection with PWM fan control (see branches)
+* **PyTorch**: For local YOLOv8 model inference (CPU or GPU)
+
+### Required Tools
+
+Install these tools and ensure they're on your environment `$PATH`:
+
+* **`task`**: Build orchestration - https://taskfile.dev/installation/#install-script
+* **`docker`** and **`docker-compose`**: Container runtime and composition - https://docs.docker.com/engine/install/
+* **`uv`**: Python package manager - https://docs.astral.sh/uv/getting-started/installation/
+
+For local development (optional):
+* **`python3`**: Python 3.12+ runtime
 
 ### Installation
 
-* :stop_sign: This project uses [1Password Secrets Automation][1p-url] to store both application key-value pairs as well as runtime secrets. It is assumed that the connect server containers are already running on your environment. If you do not want to use this, then you'll need to fork this package and make the changes as appropriate. It's actually very easy to set up, but note that 1Password is a paid product with a free-tier for secrets automation.
+0. **:stop_sign: Prerequisites - 1Password Secrets Automation Setup**
 
-* :construction: If a Google authorization token is not present on the local file system, [pydrive][gdrive-url] will initiate an [oauth workflow](https://pythonhosted.org/PyDrive/quickstart.html#authentication) which needs to be followed at least once in order to interact with Google Drive. During this flow, a URL will be logged that needs to be followed by the authorizing user at which point the client will store the token and it will be backed up regularly. As long as the token is backed up, it will remain valid until the authorization is revoked.
+   This project relies on [1Password Secrets Automation][1p-url] for configuration and credential management. A 1Password Connect server container must be running in your environment.
 
-Here is an example of how this looks for my application and the generation of the docker-compose.yml relies on this step. Your secrets automation vault must contain an entry called `ENV.snapshot-processor` with these keys:
+   Your 1Password Secrets Automation vault must contain an entry called `ENV.snapshot-processor` with the following configuration variables:
 
-| Variable | Description | Example |
-| --- | --- | --- |
-| `APP_NAME` | Application name used in logging and metrics | `snapshot-processor` |
-| `AWS_ALT_REGION` | AWS region (used for dual-region) | `eu-west-1` |
-| `AWS_CONFIG_FILE` | AWS client configuration file | `/home/app/.aws/config` |
-| `AWS_DEFAULT_REGION` | AWS region | `us-east-1` |
-| `CRONITOR_MONITOR_KEY` | [Cronitor][cronitor-url] configuration key | *project specific* |
-| `DEVICE_NAME` | Used for container host name. | `snapshot-processor` |
-| `FTP_CREATE_DIRS` | IP-camera upload directories | `snapshots/cam1,snapshots/cam2` |
-| `FTP_PASS` | FTP basic-auth password | *project specific* |
-| `FTP_UPLOAD_DIR` | Upload directory within the FTP root | `uploads/snapshots` |
-| `FTP_USER` | FTP basic-auth user | *project specific* |
-| `GOOGLE_DRIVE_FOLDER` | Google Drive folder name | *project specific* |
-| `HC_PING_URL` | [Healthchecks][healthchecks-url] URL | *project specific* |
-| `INPUT_X_LOCATION` | Device location | *project specific* |
-| `INPUT_X_TYPE` | Device type | `Camera` |
-| `OBJECT_DETECTION_ENABLED` | Detect objects in snapshots | `true` |
-| `OP_CONNECT_HOST` | 1Password connect server URL | *network specific* |
-| `OP_CONNECT_TOKEN` | 1Password connect server token | *project specific* |
-| `OP_VAULT` | 1Password vault | *project specific* |
-| `OUTPUT_X_LOCATION` | Device location | *project specific* |
-| `OUTPUT_X_TYPE` | Device type | `Camera` |
-| `RABBITMQ_DEVICE_TOPIC` | Publication topic for this project | `snapshot` |
-| `RABBITMQ_EXCHANGE` | Name of RabbitMQ exchange | `home_automation` |
-| `RABBITMQ_SERVER_ADDRESS` | IP address of RabbitMQ exchange | *network specific* |
-| `USER` | Process user | `app` |
+   | Variable | Purpose | Example |
+   |---|---|---|
+   | `APP_NAME` | Application identifier for logging | `snapshot-processor` |
+   | `AWS_ALT_REGION` | Alternate AWS region (dual-region setup) | `eu-west-1` |
+   | `AWS_CONFIG_FILE` | AWS configuration file path | `/home/app/.aws/config` |
+   | `AWS_DEFAULT_REGION` | Primary AWS region for Rekognition | `us-east-1` |
+   | `CRONITOR_MONITOR_KEY` | Cronitor health check API key | *specific to your account* |
+   | `DEVICE_NAME` | Container hostname | `snapshot-processor` |
+   | `FTP_CREATE_DIRS` | Directories to create in FTP root | `snapshots/cam1,snapshots/cam2` |
+   | `FTP_PASS` | FTP server password (basic auth) | *project specific* |
+   | `FTP_UPLOAD_DIR` | FTP upload root directory | `uploads/snapshots` |
+   | `FTP_USER` | FTP server username (basic auth) | *project specific* |
+   | `GOOGLE_DRIVE_FOLDER` | Google Drive folder name for snapshots | *project specific* |
+   | `HC_PING_URL` | Healthchecks.io URL for health monitoring | *specific to your check* |
+   | `INPUT_1_LOCATION` through `INPUT_8_LOCATION` | Camera location names | *device specific* |
+   | `INPUT_1_TYPE` through `INPUT_8_TYPE` | Camera types | `Camera` |
+   | `MINIMUM_HUMAN_CONFIDENCE` | Confidence threshold for human detection | `0.8` |
+   | `OBJECT_DETECTION_ENABLED` | Enable object detection feature | `true` |
+   | `OBJECT_DETECTION_MODEL` | Detection model type | `yolov8n` |
+   | `OP_CONNECT_HOST` | 1Password Connect server URL | `http://1password-connect:8080` |
+   | `OP_CONNECT_TOKEN` | 1Password Connect API token | *specific to your server* |
+   | `OP_VAULT` | 1Password vault ID | *specific to your vault* |
+   | `OUTPUT_1_LOCATION` through `OUTPUT_8_LOCATION` | Output device location names | *device specific* |
+   | `OUTPUT_1_TYPE` through `OUTPUT_8_TYPE` | Output device types | `Camera` |
+   | `RABBITMQ_DEVICE_TOPIC` | RabbitMQ topic for snapshot messages | `snapshot` |
+   | `RABBITMQ_EXCHANGE` | RabbitMQ exchange name | `home_automation` |
+   | `RABBITMQ_SERVER_ADDRESS` | RabbitMQ broker IP/hostname | `192.168.1.100` |
+   | `RUN_FTP_SERVER` | Enable FTP server feature | `true` |
+   | `USER` | Process user in container | `app` |
 
-With these configured, you are now able to build the application. Any variables referenced in the [application configuration][appconf-url] will be automatically replaced.
+   **Additional Credentials** (stored separately in 1Password):
+   - `Google/oath/client_secret`: Google OAuth 2.0 client credentials for Drive API
+   - `FTP/username`: FTP server username
+   - `FTP/password`: FTP server password
+   - `Cronitor/password`: Cronitor API key
+   - `Sentry/__APP_NAME__/dsn`: Sentry DSN
 
-In addition to this, [additional runtime configuration](https://github.com/tailucas/snapshot-processor/blob/master/app/__main__.py#L52-L58) is used by the application, and also need to be contained within the secrets vault. With these configured, you are now able to run the application.
+1. **Clone Repository and Initialize Submodules**
 
-1. Clone the repo
-   ```sh
+   ```bash
    git clone https://github.com/tailucas/snapshot-processor.git
-   ```
-2. Verify that the git submodule is present.
-   ```sh
+   cd snapshot-processor
    git submodule init
    git submodule update
    ```
-4. Make the Docker runtime user and set directory permissions. :hand: Be sure to first review the Makefile contents for assumptions around user IDs for Docker.
-   ```sh
-   make user
+
+2. **Create Data Directory and Set Permissions**
+
+   ```bash
+   task datadir
    ```
-5. Now generate the docker-compose.yml:
-   ```sh
-   make setup
+
+   Creates `/data` directory for FTP uploads and Google Drive token storage (UID 999).
+
+3. **Configure Runtime Environment**
+
+   ```bash
+   task configure
    ```
-6. And generate the Docker image:
-   ```sh
-   make build
+
+   Generates `.env` from `base.env` template and 1Password secrets.
+
+4. **Build Docker Image**
+
+   ```bash
+   task build
    ```
-7. If successful and the local environment is running the 1Password connect containers, run the application. For foreground:
-   ```sh
-   make run
+
+   Multi-stage Docker build process:
+   - Extends `tailucas/base-app:latest` base image
+   - Installs locale support
+   - Adds backup scripts
+   - Configures cron jobs
+   - Installs uv-managed Python dependencies
+   - Installs PyTorch, YOLOv8, OpenCV, Ultralytics
+   - Copies application code
+   - Configures FTP server (if enabled)
+
+5. **Run Application**
+
+   **Foreground (interactive, logs to console)**:
+   ```bash
+   task run
    ```
-   For background:
-   ```sh
-   make rund
+
+   **Background (detached, logs to syslog)**:
+   ```bash
+   task rund
    ```
+
+   The application will:
+   - Initialize RabbitMQ client for device messaging
+   - Start watchdog file system observer for FTP upload detection
+   - Authenticate to Google Drive (OAuth flow if token missing)
+   - Initialize Snapshot fetcher with camera configuration
+   - Start ObjectDetector (AWS Rekognition or YOLOv8)
+   - Start GoogleDriveUploader for async uploads
+   - Start GoogleDriveArchiver for folder organization
+   - Launch FTP server (if enabled)
+   - Run main event loop
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-<!-- USAGE EXAMPLES -->
-## Usage
+## Application Components
 
-Running the application will:
+### Snapshot Fetching
 
-* Start the RabbitMQ client.
-* Start a [watchdog][watchdog-url] file system observer to detect FTP uploads.
-* Start a Google Drive client to store snapshots with date-folder archive function.
-* Start the main application loop `Snapshot` which waits for trigger events.
+The `Snapshot` class (line 204) manages camera snapshot fetching:
+- Receives trigger events from RabbitMQ for specific cameras
+- Constructs camera-specific snapshot URLs (Foscam-compatible by default)
+- Fetches images via HTTP with retry logic and timeout handling
+- Validates image data (size, format, MD5 checksum)
+- Caches locally with LRU cache for efficiency
+- Relays images to ObjectDetector via ZeroMQ
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+Supports multiple camera models through configurable `default_command` and `default_image_format`.
+
+### Object Detection
+
+The `ObjectDetector` class (line 902) provides detection abstraction:
+
+**AWS Rekognition Mode** (cloud-based):
+- Sends images to AWS Rekognition `DetectLabels` API
+- Identifies objects, scenes, and human presence with confidence scores
+- Returns structured metadata for automation decisions
+- Scales automatically with load (pay-per-image pricing)
+- Primary detection for main branch
+
+**YOLOv8 Mode** (local, CPU/GPU):
+- Uses Ultralytics YOLOv8 neural network model
+- Runs inference on local hardware (CPU or GPU)
+- Identifies human presence with confidence thresholds
+- Privacy-focused (no cloud dependency)
+- Included in optional `coding` dependency group
+- Suitable for Jetson Nano and edge deployments
+
+Feature flags control which detector is active.
+
+### Google Drive Integration
+
+**GoogleDriveUploader** (line 621):
+- Monitors local cache for new snapshots
+- Asynchronously uploads to configured Google Drive folder
+- Handles OAuth authentication with token caching
+- Implements retry logic for failed uploads
+- Manages upload queue to avoid rate limiting
+
+**GoogleDriveArchiver** (line 490):
+- Periodically scans Google Drive folder
+- Organizes snapshots into year/month/day folder structure
+- Skips (preserves) starred images
+- Cleans up old flat-structure files
+
+**Google Drive OAuth Setup**:
+- First run initiates OAuth flow via PyDrive
+- User follows URL to authorize Google Drive access
+- Token saved to `/data/snapshot_processor_creds`
+- Backed up regularly (see cron jobs)
+
+### FTP Server
+
+The `SnapshotFTPHandler` (app/ftp_server.py) provides FTP-based upload:
+- IP cameras can push snapshots directly via FTP
+- Basic authentication with configurable username/password
+- Creates configured upload directories automatically
+- Logs all FTP events (login, upload, download)
+- Optional feature (controlled by `RUN_FTP_SERVER` flag)
+- Listens on port 21 (exposed in docker-compose.yml)
+
+### File System Monitoring
+
+The `UploadEventHandler` (line 765) watches for local FTP uploads:
+- Uses watchdog library to monitor `/data/ftp` directory
+- Detects file creation, movement, and completion
+- De-duplicates rapid file system events
+- Validates file integrity before processing
+- Triggers snapshot processing pipeline
+
+## Build System
+
+### Task CLI (Taskfile.yml)
+
+Primary build orchestration:
+
+- `task build` - Build Docker image with all dependencies and application code
+- `task run` - Run container in foreground with full log output
+- `task rund` - Run container detached (persists after terminal close)
+- `task configure` - Generate .env and docker-compose.yml from 1Password secrets
+- `task datadir` - Create data directory with proper permissions (UID/GID 999)
+- `task python` - Setup Python virtual environment with uv
+- `task push` - Push built image to Docker Hub/registry
+
+### Dockerfile
+
+Extends `tailucas/base-app:latest` with:
+- Locale generation (LANG/LANGUAGE args)
+- Backup authentication token scripts
+- Cron job configuration (backup_auth_token, cleanup_snapshots)
+- Python dependencies (uv-managed via pyproject.toml)
+- PyTorch (CPU or GPU variants)
+- OpenCV (headless variant for containers)
+- YOLOv8 / Ultralytics
+- Supporting libraries (numpy, PIL, matplotlib, polars, pyyaml)
+- FTP server configuration
+- Application code (app/__main__.py, app/ftp_server.py)
+- Runs as user `app` (UID 999)
+
+### Dependencies
+
+**Python** (`pyproject.toml`, managed via uv):
+- `tailucas-pylib>=0.5.6` - Shared utilities, threading, ZeroMQ, RabbitMQ
+- `pydrive>=1.3.1` - Google Drive API integration
+- `pyftpdlib>=2.0.1` - FTP server implementation
+- `cachetools>=6.2.0` - LRU image caching
+- `watchdog>=6.0.0` - File system event monitoring
+- `awscli>=1.42.35` - AWS CLI for Rekognition integration
+- `pillow>=11.3.0` - Image processing
+- `boto3` (via awscli) - AWS SDK for Rekognition
+
+**Optional/Development** (`coding` dependency group):
+- `torch>=2.8.0` - PyTorch ML framework (CPU variant in container)
+- `torchvision>=0.23.0` - Computer vision model hub
+- `ultralytics>=8.3.202` - YOLOv8 model and training
+- Custom PyTorch index: https://download.pytorch.org/whl/cpu
+
+### Configuration
+
+**config/app.conf** (INI format):
+- `[app]`: Shutdown grace period, device name, monitor keys
+- `[creds]`: Sentry DSN and Cronitor password paths
+- `[rabbitmq]`: Exchange, topic, server address
+- `[snapshots]`: FTP root, upload directory, detection flags
+- `[rekognition]`: AWS region for Rekognition
+- `[object_detection]`: YOLOv8 model selection
+- `[human_detection]`: Confidence threshold
+- `[gdrive]`: Google Drive folder, token path
+- `[camera]`: Snapshot command, image format
+- `[input_location]` / `[input_type]`: 8 camera inputs
+- `[output_location]` / `[output_type]`: 8 device outputs
+
+**Docker Compose**:
+- Port 21: FTP server
+- Syslog logging to Docker host
+- 1Password Connect secret integration
+- Volume mounts: `/data` for FTP and tokens, `/dev/log` for syslog
+
+## Features & Capabilities
+
+### Image Processing Pipeline
+
+1. **Trigger**: Device event arrives via RabbitMQ
+2. **Fetch**: Snapshot thread connects to IP camera via HTTP
+3. **Validate**: Checks image size, format, MD5 checksum
+4. **Cache**: Stores locally in LRU memory cache
+5. **Detect**: Sends to Rekognition or YOLOv8 detector
+6. **Store**: GoogleDriveUploader queues for async upload
+7. **Publish**: Results sent back through RabbitMQ
+8. **Archive**: GoogleDriveArchiver organizes on Drive
+
+### Cron Jobs
+
+- `backup_auth_token`: Periodic Google Drive token backup to data directory
+- `cleanup_snapshots`: Cleanup old local snapshot cache
+
+### Error Handling
+
+The application handles various failure scenarios:
+- HTTP connection errors (retries with backoff)
+- RabbitMQ connection loss (auto-reconnect with exponential backoff)
+- Google Drive API errors (retry with queue persistence)
+- Image validation failures (delete invalid, retry later)
+- AWS Rekognition throttling (request queuing)
+- File system errors (log and continue)
+- SSL/TLS errors (comprehensive exception handling)
+
+### Multi-Region Support
+
+AWS Rekognition can use dual regions:
+- Primary region: `AWS_DEFAULT_REGION`
+- Alternate region: `AWS_ALT_REGION`
+- Useful for failover or regional optimization
+
+### Feature Flags
+
+Controlled via environment/config:
+- `FEATURE_FLAG_OBJECT_DETECTION`: Master switch for all detection
+- `FEATURE_FLAG_CLOUD_OBJECT_DETECTION`: AWS Rekognition
+- `FEATURE_FLAG_LOCAL_OBJECT_DETECTION`: YOLOv8
+- `FEATURE_FLAG_CLOUD_STORAGE_MANAGEMENT`: Google Drive archival
 
 <!-- LICENSE -->
 ## License
@@ -172,8 +456,6 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
 * [All the Shields](https://github.com/progfay/shields-with-icon)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-[![Hits](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2Ftailucas%2Fsnapshot-processor%2F&count_bg=%2379C83D&title_bg=%23555555&icon=&icon_color=%23E7E7E7&title=visits&edge_flat=true)](https://hits.seeyoufarm.com)
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
