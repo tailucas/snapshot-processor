@@ -28,9 +28,9 @@ from pika.exceptions import (
     StreamLostError,
     ConnectionClosedByBroker,
 )
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
-from pydrive.files import FileNotUploadedError, ApiRequestError
+from pydrive2.auth import GoogleAuth
+from pydrive2.drive import GoogleDrive
+from pydrive2.files import FileNotUploadedError, ApiRequestError
 from googleapiclient.errors import HttpError
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException, Timeout
