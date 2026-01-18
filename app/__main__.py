@@ -755,7 +755,17 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             log.info(
                 f"Trashing {file_base_name} ({upload_file_id}) from Google Drive folder {self._gdrive_folder}..."
             )
-            f.Trash()
+            for tries in range(1, 3):
+                try:
+                    f.Trash()
+                    break
+                except (
+                    BrokenPipeError
+                ) as e:
+                    log.warning(
+                        f"Problem trashing {upload_file_id} due to {e!s}. Retrying..."
+                    )
+                    sleep(1)
             # and retry the upload
             return False
         # all good, treat as done
