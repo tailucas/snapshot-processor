@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from http.client import BadStatusLine, IncompleteRead
 from httplib2.error import HttpLib2Error
 from io import BytesIO
+from json import JSONDecodeError
 from mimetypes import MimeTypes
 from pika.exceptions import (
     AMQPConnectionError,
@@ -760,7 +761,8 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                     f.Trash()
                     break
                 except (
-                    BrokenPipeError
+                    BrokenPipeError,
+                    JSONDecodeError
                 ) as e:
                     log.warning(
                         f"Problem trashing {upload_file_id} due to {e!s}. Retrying..."
