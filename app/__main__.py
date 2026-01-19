@@ -762,7 +762,8 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                     break
                 except (
                     BrokenPipeError,
-                    JSONDecodeError
+                    JSONDecodeError,
+                    ConnectionResetError
                 ) as e:
                     log.warning(
                         f"Problem trashing {upload_file_id} due to {e!s}. Retrying..."
