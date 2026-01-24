@@ -36,7 +36,7 @@ from googleapiclient.errors import HttpError
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException, Timeout
 from socket import error as socket_error, gaierror as socket_gaierror
-from ssl import SSLEOFError
+from ssl import SSLEOFError, SSLError
 from time import sleep
 from ultralytics import YOLO
 from urllib.request import pathname2url
@@ -763,7 +763,8 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                 except (
                     BrokenPipeError,
                     JSONDecodeError,
-                    ConnectionResetError
+                    ConnectionResetError,
+                    SSLError
                 ) as e:
                     log.warning(
                         f"Problem trashing {upload_file_id} due to {e!s}. Retrying..."
