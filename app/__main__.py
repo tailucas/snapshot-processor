@@ -51,9 +51,10 @@ from watchdog.events import (
 from watchdog.observers import Observer
 from zmq import ContextTerminated
 
-from tailucas_pylib import APP_NAME, DEVICE_NAME, app_config, creds, log, threads
+from tailucas_pylib import APP_NAME, DEVICE_NAME, app_config, log, threads
 from tailucas_pylib.app import AppThread, ZmqRelay
 from tailucas_pylib.aws.metrics import post_count_metric
+from tailucas_pylib.creds import Creds
 from tailucas_pylib.datetime import (
     make_iso_timestamp,
     make_timestamp,
@@ -75,11 +76,6 @@ FEATURE_FLAG_LOCAL_OBJECT_DETECTION = "local-object-detection"
 FEATURE_FLAG_CLOUD_STORAGE_MANAGEMENT = "cloud-storage-management"
 
 HEARTBEAT_INTERVAL_SECONDS = 5
-
-
-sentry_dsn = creds.get_creds(
-    app_config.get("creds", "sentry_dsn").replace("__APP_NAME__", APP_NAME)
-)
 
 
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
@@ -1069,8 +1065,13 @@ class ObjectDetector(ZmqRelay):
 
 
 def main():
+    creds = Creds()
+    creds.validate_creds()
     # sentry instrumentation
     log.info("Loading Sentry.io instrumentation...")
+    sentry_dsn = creds.get_creds(
+        app_config.get("creds", "sentry_dsn").replace("__APP_NAME__", APP_NAME)
+    )
     sentry_sdk.init(
         dsn=sentry_dsn,
         integrations=[

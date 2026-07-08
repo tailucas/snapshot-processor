@@ -20,6 +20,11 @@ COPY config ./config
 COPY settings.yaml .
 COPY uv.lock pyproject.toml .python-version ./
 RUN chown app:app uv.lock
+# Ultralytics
+RUN mkdir -p /home/app/.config/Ultralytics
+# Matplotlib
+RUN mkdir -p /home/app/.config/matplotlib
+RUN chown -R app:app /home/app/.config/
 # switch to user
 USER app
 RUN "${APP_DIR}/python_setup.sh"

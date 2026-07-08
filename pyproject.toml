@@ -19,10 +19,10 @@ dependencies = [
 
 [dependency-groups]
 coding = [
-    "pillow>=11.3.0",
-    "torch>=2.8.0",
-    "torchvision>=0.23.0",
-    "ultralytics>=8.3.202",
+    "pillow>=12.3.0",
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
+    "ultralytics>=8.4.90",
 ]
 dev = [
     "ruff>=0.14.0",
