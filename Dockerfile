@@ -37,6 +37,7 @@ RUN uv pip install ultralytics --no-deps && \
 # add the project application
 COPY app/__main__.py ./app/
 COPY app/ftp_server.py ./app/
+COPY app/gauth_configure.py ./app/
 # override entrypoint
 COPY app_entrypoint.sh .
 CMD ["/opt/app/entrypoint.sh"]

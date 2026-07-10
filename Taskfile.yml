@@ -76,3 +76,9 @@ tasks:
       - test -d ./data/
     cmds:
       - docker compose up -d --remove-orphans
+  shell:
+    desc: Run docker container and detach
+    preconditions:
+      - docker -v
+    cmds:
+      - docker compose run app bash

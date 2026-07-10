@@ -24,6 +24,9 @@ services:
     hostname: ${DEVICE_NAME:-base-app}
     ports:
       - "21:21"
+      # pydrive2
+      - "8080:8080"
+      - "8090:8090"
     volumes:
       - ./data:/data
     extra_hosts:

@@ -38,3 +38,10 @@ fi
 
 # Google Refresh Token restore
 /opt/app/backup_auth_token.sh
+
+# Google OAuth token setup (only if creds file is missing or empty)
+if [ ! -s /data/snapshot_processor_creds ]; then
+  # pydrive2 uses print
+  export PYTHONUNBUFFERED=1
+  uv run gauth_configure
+fi

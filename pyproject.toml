@@ -56,6 +56,7 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [project.scripts]
+gauth_configure = "app.gauth_configure:main"
 aws_configure = "tailucas_pylib.tools.aws_configure:main"
 config_interpol = "tailucas_pylib.tools.config_interpol:main"
 cred_tool = "tailucas_pylib.tools.cred_tool:main"
