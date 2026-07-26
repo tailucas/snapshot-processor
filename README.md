@@ -137,7 +137,7 @@ Optional services:
 
 Install these tools and ensure they're on your environment `$PATH`:
 
-* **`task`**: Build orchestration - https://taskfile.dev/installation/#install-script
+* **`make`**: Build orchestration (GNU Make) - https://www.gnu.org/software/make/
 * **`docker`** and **`docker-compose`**: Container runtime and composition - https://docs.docker.com/engine/install/
 * **`uv`**: Python package manager - https://docs.astral.sh/uv/getting-started/installation/
 
@@ -201,7 +201,7 @@ For local development (optional):
 2. **Create Data Directory and Set Permissions**
 
    ```bash
-   task datadir
+   make datadir
    ```
 
    Creates `/data` directory for FTP uploads and Google Drive token storage (UID 999).
@@ -209,7 +209,7 @@ For local development (optional):
 3. **Configure Runtime Environment**
 
    ```bash
-   task configure
+   make configure
    ```
 
    Generates `.env` from `base.env` template and 1Password secrets.
@@ -217,7 +217,7 @@ For local development (optional):
 4. **Build Docker Image**
 
    ```bash
-   task build
+   make build
    ```
 
    Multi-stage Docker build process:
@@ -234,12 +234,12 @@ For local development (optional):
 
    **Foreground (interactive, logs to console)**:
    ```bash
-   task run
+   make run
    ```
 
    **Background (detached, logs to syslog)**:
    ```bash
-   task rund
+   make rund
    ```
 
    The application will:
@@ -332,17 +332,19 @@ The `UploadEventHandler` (line 765) watches for local FTP uploads:
 
 ## Build System
 
-### Task CLI (Taskfile.yml)
+### Make CLI (Makefile)
 
-Primary build orchestration:
+Primary build orchestration (run `make help` for all targets):
 
-- `task build` - Build Docker image with all dependencies and application code
-- `task run` - Run container in foreground with full log output
-- `task rund` - Run container detached (persists after terminal close)
-- `task configure` - Generate .env and docker-compose.yml from 1Password secrets
-- `task datadir` - Create data directory with proper permissions (UID/GID 999)
-- `task python` - Setup Python virtual environment with uv
-- `task push` - Push built image to Docker Hub/registry
+- `make build` - Build Docker image with all dependencies and application code
+- `make run` - Run container in foreground with full log output
+- `make rund` - Run container detached (persists after terminal close)
+- `make configure` - Generate .env and docker-compose.yml from 1Password secrets
+- `make datadir` - Create data directory with proper permissions (UID/GID 999)
+- `make python` - Setup Python virtual environment with uv
+- `make push` - Push built image to Docker Hub/registry
+- `make shell` - Open an interactive shell in the app container
+- `make dev` - Build and enter the development container (host only)
 
 ### Dockerfile
 
