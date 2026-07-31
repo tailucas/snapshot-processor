@@ -3,7 +3,7 @@ set -eu
 set -o pipefail
 
 # client details
-echo 'Google/oath/client_secret' | uv run cred_tool > /opt/app/client_secrets.json
+echo 'Google/oath/client_secret' | uv run --frozen --no-sync cred_tool > /opt/app/client_secrets.json
 [ -e /opt/app/client_secrets.json ] && grep -q '[^[:space:]]' /opt/app/client_secrets.json
 if test "$(jq type /opt/app/client_secrets.json | tr -d '"')" != "object"; then
   echo "Invalid JSON /opt/app/client_secrets.json"
@@ -29,7 +29,7 @@ done
 if [ "${RUN_FTP_SERVER:-}" == "true" ]; then
   cat << EOF >> /opt/app/supervisord.conf
 [program:ftp]
-command=uv run ftp
+command=uv run --frozen --no-sync ftp
 directory=/opt/app/
 user=app
 autorestart=unexpected
@@ -43,5 +43,5 @@ fi
 if [ ! -s /data/snapshot_processor_creds ]; then
   # pydrive2 uses print
   export PYTHONUNBUFFERED=1
-  uv run gauth_configure
+  uv run --frozen --no-sync gauth_configure
 fi

@@ -13,10 +13,10 @@ log () {
 . <(sed 's/^/export /' /opt/app/cron.env)
 # generate AWS configuration
 log "Generating AWS config (${AWS_CONFIG_FILE:-default}) and credentials (${AWS_SHARED_CREDENTIALS_FILE:-default})..."
-uv run aws_configure
+uv run --frozen --no-sync aws_configure
 
 if [ -s /data/snapshot_processor_creds ]; then
-  uv run aws s3 cp /data/snapshot_processor_creds "s3://${BACKUP_S3_BUCKET}/snapshot_processor_creds" --only-show-errors
+  uv run --frozen --no-sync aws s3 cp /data/snapshot_processor_creds "s3://${BACKUP_S3_BUCKET}/snapshot_processor_creds" --only-show-errors
 else
-  uv run aws s3 cp "s3://${BACKUP_S3_BUCKET}/snapshot_processor_creds" /data/snapshot_processor_creds --only-show-errors
+  uv run --frozen --no-sync aws s3 cp "s3://${BACKUP_S3_BUCKET}/snapshot_processor_creds" /data/snapshot_processor_creds --only-show-errors
 fi
