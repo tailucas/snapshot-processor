@@ -13,7 +13,7 @@ dependencies = [
     "cachetools>=6.2.0",
     "pydrive2>=1.21.3",
     "pyftpdlib>=2.0.1",
-    "tailucas-pylib[aws,creds,monitoring,mq]>=0.7.1",
+    "tailucas-pylib[aws,creds,monitoring,mq]>=0.7.7",
     "watchdog>=6.0.0",
 ]
 
