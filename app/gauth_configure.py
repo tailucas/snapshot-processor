@@ -10,7 +10,7 @@ from tailucas_pylib import app_config, log
 def trigger_oauth(auth: GoogleAuth, creds_file: str):
     auth.LocalWebserverAuth(bind_addr="0.0.0.0", launch_browser=False)
     auth.SaveCredentialsFile(creds_file)
-    log.info(f"Saved Google credentials to {creds_file}")
+    log.info("Saved Google credentials", extra={"creds_file": creds_file})
 
 
 def main():
@@ -24,22 +24,31 @@ def main():
 
     auth = GoogleAuth()
     if creds_missing:
-        log.info(f"Google credentials missing or empty in [{creds_file}]. Starting interactive OAuth setup...")
+        log.info(
+            "Google credentials missing or empty. Starting interactive OAuth setup...",
+            extra={"creds_file": creds_file},
+        )
         trigger_oauth(auth, creds_file)
     else:
-        log.debug(f"Loading Google credentials from [{creds_file}]...")
+        log.debug("Loading Google credentials", extra={"creds_file": creds_file})
         auth.LoadCredentialsFile(creds_file)
         if auth.credentials is None:
-            log.warning(f"Credentials file [{creds_file}] exists but contains no valid credentials. Starting interactive OAuth setup...")
+            log.warning(
+                "Credentials file exists but contains no valid credentials. "
+                "Starting interactive OAuth setup...",
+                extra={"creds_file": creds_file},
+            )
             trigger_oauth(auth, creds_file)
         elif auth.access_token_expired:
             log.info("Access token expired, refreshing...")
             auth.Refresh()
             auth.SaveCredentialsFile(creds_file)
-            log.info(f"Refreshed and saved Google credentials to {creds_file}")
+            log.info(
+                "Refreshed and saved Google credentials", extra={"creds_file": creds_file}
+            )
         else:
             auth.Authorize()
-            log.info(f"Google credentials in [{creds_file}] are valid.")
+            log.info("Google credentials are valid", extra={"creds_file": creds_file})
 
 
 if __name__ == "__main__":

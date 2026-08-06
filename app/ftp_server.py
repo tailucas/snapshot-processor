@@ -10,17 +10,17 @@ from tailucas_pylib import APP_NAME, app_config, creds, log
 
 class SnapshotFTPHandler(FTPHandler):
     def on_login(self, username):
-        log.info(f"{username} logged in.")
+        log.info("FTP user logged in", extra={"username": username})
 
     def on_file_sent(self, file):
-        log.info(f"Sent {file}.")
+        log.info("FTP file sent", extra={"file": file})
 
     def on_file_received(self, file):
-        log.info(f"Received {file}.")
+        log.info("FTP file received", extra={"file": file})
         # TODO: send to object detector with correct device association
 
     def on_incomplete_file_received(self, file):
-        log.info(f"Received partial file {file}. Removing...")
+        log.info("FTP received partial file. Removing...", extra={"file": file})
         os.remove(file)
 
 
@@ -63,7 +63,13 @@ def main():
     server.max_cons_per_ip = 5
 
     log.info(
-        f'Starting FTP server "{ftp_banner}" on port {ftp_server_port} with username {ftp_username} mounted at {root_dir}'
+        "Starting FTP server",
+        extra={
+            "ftp_banner": ftp_banner,
+            "ftp_server_port": ftp_server_port,
+            "ftp_username": ftp_username,
+            "root_dir": root_dir,
+        },
     )
     # start ftp server
     server.serve_forever()
