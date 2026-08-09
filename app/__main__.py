@@ -1056,6 +1056,7 @@ class ObjectDetector(ZmqRelay):
                 if results:
                     # find Person labels
                     person_count = 0
+                    face_count = 0
                     labels = []
                     for result in results:
                         person_detected = False
@@ -1064,9 +1065,12 @@ class ObjectDetector(ZmqRelay):
                             label_name = detect_dict["name"]
                             label_confidence = float(detect_dict["confidence"])
                             labels.append((label_name, label_confidence))
-                            if label_name in ["person", "face"]:
+                            if "person" in label_name:
                                 person_detected = True
                                 person_count += 1
+                            if "face" in label_name:
+                                person_detected = True
+                                face_count += 1
                         if person_detected:
                             detect_filename = snapshot_path.replace("fetch", "detect")
                             log.debug(
@@ -1099,7 +1103,7 @@ class ObjectDetector(ZmqRelay):
                         },
                     )
                     if person_count > 0:
-                        additional_info = f"{person_count} person(s) and {len(labels)} things"
+                        additional_info = f"{person_count} person(s), {face_count} face(s), and {len(labels)} things"
                         event_detail = f"{device_label} ({image_source}): {additional_info}."
                         log.debug(
                             "Object detection event detail",
