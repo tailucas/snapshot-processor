@@ -38,6 +38,7 @@ from pydrive2.files import ApiRequestError, FileNotUploadedError
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException, Timeout
 from sentry_sdk.integrations.asyncio import AsyncioIntegration
+from sentry_sdk.integrations.logging import ignore_logger
 from sentry_sdk.integrations.sys_exit import SysExitIntegration
 from sentry_sdk.integrations.threading import ThreadingIntegration
 from ultralytics import YOLO
@@ -77,15 +78,15 @@ FEATURE_FLAG_CLOUD_STORAGE_MANAGEMENT = "cloud-storage-management"
 HEARTBEAT_INTERVAL_SECONDS = 5
 
 
+# reduce ultralytics logging noise
+ignore_logger(name="ultralytics")
+
+
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
-    return os.path.join(
-        parent_path, f"{operation}_" + str(unix_timestamp) + "." + file_extension
-    )
+    return os.path.join(parent_path, f"{operation}_" + str(unix_timestamp) + "." + file_extension)
 
 
-def create_publisher_struct(
-    device_key, device_label, image_data, image_timestamp, storage_url, storage_path
-):
+def create_publisher_struct(device_key, device_label, image_data, image_timestamp, storage_url, storage_path):
     return {
         "inputs": [
             {
@@ -239,9 +240,7 @@ class Snapshot(ZmqRelay):
         device_label = output_trigger["device_label"]
         device_params = output_trigger["device_params"]
         if device_key not in self.cameras:
-            log.error(
-                "Camera configuration missing", extra={"device_label": device_label}
-            )
+            log.error("Camera configuration missing", extra={"device_label": device_label})
             post_count_metric("Errors")
             return
         try:
@@ -254,7 +253,7 @@ class Snapshot(ZmqRelay):
         except AssertionError:
             post_count_metric("Errors")
             return
-        log.info(
+        log.debug(
             "Fetching image data from IP camera",
             extra={"device_label": device_label, "camera_url": camera_config.url},
         )
@@ -303,9 +302,7 @@ class Snapshot(ZmqRelay):
                     break
         if image_data is not None and im is not None and im.format is not None:
             # construct message to publish
-            unix_timestamp = int(
-                (timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds()
-            )
+            unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
             log.debug(
                 "Basing unix timestamp off of timestamp",
                 extra={"unix_timestamp": unix_timestamp, "timestamp": str(timestamp)},
@@ -327,7 +324,7 @@ class Snapshot(ZmqRelay):
                 storage_url=self.cloud_storage_url,
                 storage_path=output_filename,
             )
-            log.info(
+            log.debug(
                 "Sending image for object detection",
                 extra={
                     "device_label": device_label,
@@ -343,7 +340,7 @@ class Snapshot(ZmqRelay):
                     publisher_data,
                 )
             )
-            log.info(
+            log.debug(
                 "Saving image data",
                 extra={"device_label": device_label, "output_filename": output_filename},
             )
@@ -505,9 +502,7 @@ class GoogleDriveManager(CloudStorage):
             folder_id = file_list[0]["id"]
             folder_link = file_list[0]["alternateLink"]
         else:
-            raise RuntimeError(
-                f"Unexpected result listing Google Drive for {gdrive_folder}: {file_list!s}"
-            )
+            raise RuntimeError(f"Unexpected result listing Google Drive for {gdrive_folder}: {file_list!s}")
         log.debug(
             "Google Drive folder ID resolved",
             extra={
@@ -520,13 +515,9 @@ class GoogleDriveManager(CloudStorage):
 
 
 class GoogleDriveArchiver(AppThread, GoogleDriveManager):
-    def __init__(
-        self, gauth_creds_file, gdrive_folder, gdrive_folder_id, gdrive_folder_url
-    ):
+    def __init__(self, gauth_creds_file, gdrive_folder, gdrive_folder_id, gdrive_folder_url):
         AppThread.__init__(self, name=self.__class__.__name__)
-        GoogleDriveManager.__init__(
-            self, gauth_creds_file=gauth_creds_file, gdrive_folder=gdrive_folder
-        )
+        GoogleDriveManager.__init__(self, gauth_creds_file=gauth_creds_file, gdrive_folder=gdrive_folder)
 
         # separate connection for archiver thread to prevent PyDrive lock-up
         self._archive_drive = GoogleDrive(self.gauth)
@@ -567,10 +558,19 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                             ):
                                 archived += 1
                 except StopIteration:
-                    log.info(
-                        "Archived image snapshots", extra={"archived_count": archived}
-                    )
-            except (OSError, ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, socket_gaierror, HttpError, SSLEOFError, TimeoutError) as e:
+                    log.debug("Archived image snapshots", extra={"archived_count": archived})
+            except (
+                OSError,
+                ApiRequestError,
+                BadStatusLine,
+                IncompleteRead,
+                BrokenPipeError,
+                FileNotUploadedError,
+                socket_gaierror,
+                HttpError,
+                SSLEOFError,
+                TimeoutError,
+            ) as e:
                 log.warning(
                     "Google Drive problem archiving files. Will try again in a minute.",
                     extra={
@@ -602,17 +602,11 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
             else:
                 # create the required folder structure
                 year_folder_name = created_date.strftime("%Y")
-                year_folder_id, _ = self._get_gdrive_folder_id(
-                    gdrive, year_folder_name, root_folder_id
-                )
+                year_folder_id, _ = self._get_gdrive_folder_id(gdrive, year_folder_name, root_folder_id)
                 month_folder_name = created_date.strftime("%m")
-                month_folder_id, _ = self._get_gdrive_folder_id(
-                    gdrive, month_folder_name, year_folder_id
-                )
+                month_folder_id, _ = self._get_gdrive_folder_id(gdrive, month_folder_name, year_folder_id)
                 day_folder_name = created_date.strftime("%d")
-                day_folder_id, _ = self._get_gdrive_folder_id(
-                    gdrive, day_folder_name, month_folder_id
-                )
+                day_folder_id, _ = self._get_gdrive_folder_id(gdrive, day_folder_name, month_folder_id)
                 self._folder_id_cache[ymd_date] = day_folder_id
                 gdrive_folder_id = day_folder_id
             log.debug(
@@ -650,22 +644,16 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                     extra={"filename": filename},
                 )
                 # new parent for archival
-                gdrive_parents = [
-                    {"kind": "drive#parentReference", "id": gdrive_folder_id}
-                ]
+                gdrive_parents = [{"kind": "drive#parentReference", "id": gdrive_folder_id}]
                 # existing parents
                 for parent in parents:
                     # simply appending the parents array returned by the service is insufficient
                     # possibly due to PyDrive's change detection, or Drive
-                    gdrive_parents.append(
-                        {"kind": "drive#parentReference", "id": parent}
-                    )
+                    gdrive_parents.append({"kind": "drive#parentReference", "id": parent})
                 gdrive_file["parents"] = gdrive_parents
             else:
                 # otherwise, clobber the existing parent information
-                gdrive_file["parents"] = [
-                    {"kind": "drive#parentReference", "id": gdrive_folder_id}
-                ]
+                gdrive_file["parents"] = [{"kind": "drive#parentReference", "id": gdrive_folder_id}]
             # update the file metadata
             gdrive_file.Upload()
             return True
@@ -675,15 +663,11 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
 class GoogleDriveUploader(AppThread, GoogleDriveManager):
     def __init__(self, gauth_creds_file, gdrive_folder):
         # set up remote service setup first
-        GoogleDriveManager.__init__(
-            self, gauth_creds_file=gauth_creds_file, gdrive_folder=gdrive_folder
-        )
+        GoogleDriveManager.__init__(self, gauth_creds_file=gauth_creds_file, gdrive_folder=gdrive_folder)
         AppThread.__init__(self, name=self.__class__.__name__)
 
         # determine the Drive folder details synchronously
-        self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(
-            self.drive, self._gdrive_folder
-        )
+        self._gdrive_folder_id, self._gdrive_folder_url = self._get_gdrive_folder_id(self.drive, self._gdrive_folder)
 
         self._filetype = FileType()
 
@@ -699,9 +683,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                 if "fetch" in snapshot_path:
                     log.debug("Not uploading snapshot", extra={"snapshot_path": snapshot_path})
                     continue
-                while not self.upload(
-                    file_path=snapshot_path, created_time=snapshot_timestamp
-                ):
+                while not self.upload(file_path=snapshot_path, created_time=snapshot_timestamp):
                     # never spin
                     threads.interruptable_sleep.wait(1)
 
@@ -710,15 +692,13 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         try:
             with Image.open(file_path) as img:
                 img.verify()
-        except (OSError, SyntaxError):
-            log.warning(
-                "Not uploading corrupted image file", extra={"file_path": file_path}
-            )
+        except OSError, SyntaxError:
+            log.warning("Not uploading corrupted image file", extra={"file_path": file_path})
             return True
         # upload the snapshot
         mime_type = self._filetype.mime_type(file_path)
         file_size = os.path.getsize(filename=file_path)
-        log.info(
+        log.debug(
             "File ready for upload",
             extra={
                 "mime_type": mime_type,
@@ -734,12 +714,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             # separator required by RFC3339, and the extra requirement to have
             # the colon in the TZ offset if not in UTC.
             offset = created_time.strftime("%z")
-            created_date = (
-                created_time.strftime("%Y-%m-%dT%H:%M:%S.00")
-                + offset[:3]
-                + ":"
-                + offset[3:]
-            )
+            created_date = created_time.strftime("%Y-%m-%dT%H:%M:%S.00") + offset[:3] + ":" + offset[3:]
             log.debug(
                 "Uploading file to Google Drive with created time",
                 extra={"file_path": file_path, "created_date": created_date},
@@ -751,14 +726,22 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                     "title": file_base_name,
                     "mimeType": mime_type,
                     "createdDate": created_date,
-                    "parents": [
-                        {"kind": "drive#fileLink", "id": self._gdrive_folder_id}
-                    ],
+                    "parents": [{"kind": "drive#fileLink", "id": self._gdrive_folder_id}],
                 }
             )
             f.SetContentFile(file_path)
             f.Upload()
-        except (OSError, ApiRequestError, BadStatusLine, IncompleteRead, BrokenPipeError, FileNotUploadedError, HttpError, SSLEOFError, TimeoutError) as e:
+        except (
+            OSError,
+            ApiRequestError,
+            BadStatusLine,
+            IncompleteRead,
+            BrokenPipeError,
+            FileNotUploadedError,
+            HttpError,
+            SSLEOFError,
+            TimeoutError,
+        ) as e:
             log.warning(
                 "Google Drive problem uploading file",
                 extra={"file_path": file_path, "error": str(e)},
@@ -773,7 +756,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                 link += "=s1024"
             thumbnail_link = link
         upload_file_id = f["id"]
-        log.info(
+        log.debug(
             "Uploaded file to Google Drive folder",
             extra={
                 "file_base_name": file_base_name,
@@ -840,7 +823,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                             )
                             remove_upload = True
         if remove_upload:
-            log.info(
+            log.debug(
                 "Trashing file from Google Drive folder",
                 extra={
                     "file_base_name": file_base_name,
@@ -852,12 +835,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                 try:
                     f.Trash()
                     break
-                except (
-                    BrokenPipeError,
-                    JSONDecodeError,
-                    ConnectionResetError,
-                    SSLError
-                ) as e:
+                except (BrokenPipeError, JSONDecodeError, ConnectionResetError, SSLError) as e:
                     log.warning(
                         "Problem trashing file. Retrying...",
                         extra={"upload_file_id": upload_file_id, "error": str(e)},
@@ -872,9 +850,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
 class UploadEventHandler(FileSystemEventHandler, Closable):
     def __init__(self, fs_observer, snapshot_root, mq_device_topic):
         FileSystemEventHandler.__init__(self)
-        Closable.__init__(
-            self, connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH
-        )
+        Closable.__init__(self, connect_url=URL_WORKER_OBJECT_DETECTOR, socket_type=zmq.PUSH)
 
         self.device_events = {}
         self._snapshot_root = snapshot_root
@@ -907,9 +883,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
 
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
-            raise RuntimeError(
-                f"Image source label {device_location} is already configured."
-            )
+            raise RuntimeError(f"Image source label {device_location} is already configured.")
         # create pre-canned device events for reuse later
         self.device_events[image_dir] = DeviceEvent(
             device_key=device_key,
@@ -967,25 +941,19 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
             )
             return
         if snapshot_path in self._path_cache:
-            log.debug(
-                "Snapshot path already processed", extra={"snapshot_path": snapshot_path}
-            )
+            log.debug("Snapshot path already processed", extra={"snapshot_path": snapshot_path})
             return
         self._path_cache[snapshot_path] = True
         # cross-check that we're in the right place
         if not snapshot_path.startswith(self._snapshot_root):
-            log.debug(
-                "Ignored unmapped path event", extra={"snapshot_path": snapshot_path}
-            )
+            log.debug("Ignored unmapped path event", extra={"snapshot_path": snapshot_path})
             return
         # image snapshot that can be mapped to a device?
         device_event = self._get_device_event(snapshot_path)
         if device_event is None:
-            log.debug(
-                "No device mapping from path", extra={"snapshot_path": snapshot_path}
-            )
+            log.debug("No device mapping from path", extra={"snapshot_path": snapshot_path})
             return
-        log.info(
+        log.debug(
             "Device event from snapshot path",
             extra={"device_event": str(device_event), "snapshot_path": snapshot_path},
         )
@@ -994,16 +962,8 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         # keep in sync with invocations of create_snapshot_path
         device_event.timestamp = date_string
         # do not notify again for fetched image data
-        if (
-            "fetch" not in snapshot_path
-            and "detect" not in snapshot_path
-            and "human" not in snapshot_path
-        ):
-            unix_timestamp = int(
-                (
-                    device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)
-                ).total_seconds()
-            )
+        if "fetch" not in snapshot_path and "detect" not in snapshot_path and "human" not in snapshot_path:
+            unix_timestamp = int((device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
             publisher_data = create_publisher_struct(
                 device_key=device_event["device_key"],
                 device_label=device_event["device_label"],
@@ -1025,7 +985,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                 "Not generating redundant snapshot event",
                 extra={"snapshot_path": snapshot_path},
             )
-        log.info(
+        log.debug(
             "Uploading snapshot to cloud storage based on file system event",
             extra={"snapshot_path": snapshot_path, "date_string": date_string},
         )
@@ -1043,20 +1003,14 @@ class ObjectDetector(ZmqRelay):
             sink_zmq_url=URL_WORKER_RABBIT_PUBLISHER,
         )
 
-        self._od_enabled = app_config.getboolean(
-            "snapshots", "object_detection_enabled"
-        )
+        self._od_enabled = app_config.getboolean("snapshots", "object_detection_enabled")
         self._rekog: Any = None
         self._path_cache: LRUCache = LRUCache(maxsize=128)
         self._local_model: Any = None
-        self._minimum_human_confidence = app_config.getfloat(
-            "human_detection", "minimum_confidence"
-        )
+        self._minimum_human_confidence = app_config.getfloat("human_detection", "minimum_confidence")
 
     def startup(self):
-        self._rekog = boto3.client(
-            "rekognition", region_name=app_config.get("rekognition", "region")
-        )
+        self._rekog = boto3.client("rekognition", region_name=app_config.get("rekognition", "region"))
         model_name = app_config.get("object_detection", "model")
         log.info(
             "Using Ultralytics model for local object detection",
@@ -1088,7 +1042,7 @@ class ObjectDetector(ZmqRelay):
         # find objects using the specified model
         event_detail = None
         if is_flag_enabled(FEATURE_FLAG_OBJECT_DETECTION) and self._od_enabled:
-            log.info(
+            log.debug(
                 "Detecting objects in cached image",
                 extra={"image_source": image_source, "snapshot_path": snapshot_path},
             )
@@ -1110,15 +1064,12 @@ class ObjectDetector(ZmqRelay):
                             label_name = detect_dict["name"]
                             label_confidence = float(detect_dict["confidence"])
                             labels.append((label_name, label_confidence))
-                            if (
-                                label_name == "person"
-                                and label_confidence >= self._minimum_human_confidence
-                            ):
+                            if label_name == "person" and label_confidence >= self._minimum_human_confidence:
                                 person_detected = True
                                 person_count += 1
                         if person_detected:
                             detect_filename = snapshot_path.replace("fetch", "detect")
-                            log.info(
+                            log.debug(
                                 "Saving person detection result",
                                 extra={"detect_filename": detect_filename},
                             )
@@ -1129,10 +1080,8 @@ class ObjectDetector(ZmqRelay):
                                     "Unable to save detection result",
                                     extra={"detect_filename": detect_filename},
                                 )
-                            human_detect_filename = snapshot_path.replace(
-                                "fetch", "human"
-                            )
-                            log.info(
+                            human_detect_filename = snapshot_path.replace("fetch", "human")
+                            log.debug(
                                 "Renaming snapshot after person detection",
                                 extra={
                                     "snapshot_path": snapshot_path,
@@ -1140,7 +1089,7 @@ class ObjectDetector(ZmqRelay):
                                 },
                             )
                             os.rename(snapshot_path, human_detect_filename)
-                    log.info(
+                    log.debug(
                         "YOLO labels found",
                         extra={
                             "label_count": len(labels),
@@ -1150,19 +1099,15 @@ class ObjectDetector(ZmqRelay):
                         },
                     )
                     if person_count > 0:
-                        additional_info = (
-                            f"{person_count} person(s) and {len(labels)} things"
-                        )
-                        event_detail = (
-                            f"{device_label} ({image_source}): {additional_info}."
-                        )
-                        log.info(
+                        additional_info = f"{person_count} person(s) and {len(labels)} things"
+                        event_detail = f"{device_label} ({image_source}): {additional_info}."
+                        log.debug(
                             "Object detection event detail",
                             extra={"event_detail": event_detail},
                         )
                         input_device["event_detail"] = additional_info
             elif is_flag_enabled(FEATURE_FLAG_CLOUD_OBJECT_DETECTION):
-                log.info(
+                log.debug(
                     "Detecting objects in cached image",
                     extra={"image_source": image_source, "snapshot_path": snapshot_path},
                 )
@@ -1184,20 +1129,15 @@ class ObjectDetector(ZmqRelay):
                             label_name = detect_dict["Name"]
                             label_confidence = float(detect_dict["Confidence"])
                             labels.append((label_name, label_confidence))
-                            if (
-                                label_name == "Person"
-                                and label_confidence >= self._minimum_human_confidence
-                            ):
+                            if label_name == "Person" and label_confidence >= self._minimum_human_confidence:
                                 # if instances are provided, sum them
                                 num_instances = len(detect_dict["Instances"])
                                 if num_instances > 0:
                                     person_count += num_instances
                                 else:
                                     person_count += 1
-                                human_detect_filename = snapshot_path.replace(
-                                    "fetch", "human"
-                                )
-                                log.info(
+                                human_detect_filename = snapshot_path.replace("fetch", "human")
+                                log.debug(
                                     "Renaming snapshot after person detection",
                                     extra={
                                         "snapshot_path": snapshot_path,
@@ -1205,7 +1145,7 @@ class ObjectDetector(ZmqRelay):
                                     },
                                 )
                                 os.rename(snapshot_path, human_detect_filename)
-                        log.info(
+                        log.debug(
                             "Rekognition labels found",
                             extra={
                                 "label_count": len(labels),
@@ -1215,13 +1155,9 @@ class ObjectDetector(ZmqRelay):
                             },
                         )
                     if person_count > 0:
-                        additional_info = (
-                            f"{person_count} person(s) and {len(labels)} things"
-                        )
-                        event_detail = (
-                            f"{device_label} ({image_source}): {additional_info}."
-                        )
-                        log.info(
+                        additional_info = f"{person_count} person(s) and {len(labels)} things"
+                        event_detail = f"{device_label} ({image_source}): {additional_info}."
+                        log.debug(
                             "Object detection event detail",
                             extra={"event_detail": event_detail},
                         )
@@ -1233,12 +1169,12 @@ class ObjectDetector(ZmqRelay):
                 except Exception:
                     log.exception("Rekognition error.")
             else:
-                log.info(
+                log.debug(
                     "No viable object detection methods. Check feature flags.",
                     extra={"image_source": image_source, "snapshot_path": snapshot_path},
                 )
         else:
-            log.info(
+            log.debug(
                 "Not detecting objects due to feature flag or config",
                 extra={
                     "image_source": image_source,
@@ -1246,7 +1182,7 @@ class ObjectDetector(ZmqRelay):
                     "feature_flag": FEATURE_FLAG_OBJECT_DETECTION,
                 },
             )
-        log.info(
+        log.debug(
             "Sending detection data",
             extra={"device_label": device_label, "publisher_topic": publisher_topic},
         )
@@ -1257,10 +1193,8 @@ def main():
     creds = Creds()
     creds.validate_creds()
     # sentry instrumentation
-    log.info("Loading Sentry.io instrumentation...")
-    sentry_dsn = creds.get_creds(
-        app_config.get("creds", "sentry_dsn").replace("__APP_NAME__", APP_NAME)
-    )
+    log.debug("Loading Sentry.io instrumentation...")
+    sentry_dsn = creds.get_creds(app_config.get("creds", "sentry_dsn").replace("__APP_NAME__", APP_NAME))
     sentry_sdk.init(
         dsn=sentry_dsn,
         enable_logs=True,
@@ -1314,9 +1248,7 @@ def main():
     for field, input_type in list(input_types.items()):
         input_location = input_locations[field]
         device_key = f"{input_locations[field]} {input_type}"
-        device_info["inputs"].append(
-            {"type": input_type, "location": input_location, "device_key": device_key}
-        )
+        device_info["inputs"].append({"type": input_type, "location": input_location, "device_key": device_key})
         if input_type.lower() == "camera":
             upload_event_handler.add_image_dir(
                 device_key=device_key,
@@ -1430,9 +1362,7 @@ def main():
         # start processing file system events
         upload_event_handler.start()
         # start thread nanny
-        nanny = threading.Thread(
-            daemon=True, name="nanny", target=thread_nanny, args=(signal_handler,)
-        )
+        nanny = threading.Thread(daemon=True, name="nanny", target=thread_nanny, args=(signal_handler,))
         nanny.start()
         # start heartbeat loop
         publisher_socket.connect(URL_WORKER_RABBIT_PUBLISHER)
@@ -1448,18 +1378,16 @@ def main():
             )
             threads.interruptable_sleep.wait(HEARTBEAT_INTERVAL_SECONDS)
         raise RuntimeWarning("Shutting down...")
-    except (KeyboardInterrupt, RuntimeWarning, ContextTerminated):
+    except KeyboardInterrupt, RuntimeWarning, ContextTerminated:
         die()
-        log.info("Shutting down RabbitMQ control listener...")
+        log.debug("Shutting down RabbitMQ control listener...")
         mq_control_listener.stop()
-        log.info("Shutting down RabbitMQ relay...")
+        log.debug("Shutting down RabbitMQ relay...")
         try:
             mq_relay.close()
         except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
-            log.warning(
-                "Problem when closing RabbitMQ relay", extra={"error": str(e)}
-            )
-        log.info("Shutting down application threads...")
+            log.warning("Problem when closing RabbitMQ relay", extra={"error": str(e)})
+        log.debug("Shutting down application threads...")
         upload_event_handler.close()
         # since this thread and the signal handler are one and the same
         publisher_socket.close()

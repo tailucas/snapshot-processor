@@ -8,7 +8,7 @@ DOCKER_URL := https://docs.docker.com/engine/install
 DEVCLI_URL := https://code.visualstudio.com/docs/devcontainers/devcontainer-cli
 CHECK_USER := vscode
 
-.PHONY: help check dev dev-build dev-up datadir python configure build push run rund shell
+.PHONY: help check dev dev-build dev-up datadir python lint configure build push run rund shell
 
 # ---------- Dev container (host only) ----------
 
@@ -48,6 +48,11 @@ datadir: data/ ## Set up ./data/ (alias)
 	@touch .venv
 
 python: .venv ## Set up the Python virtual environment (alias)
+
+lint: .venv ## Run ruff format check, ruff lint, and mypy
+	uv run ruff format --check .
+	uv run ruff check .
+	uv run mypy app/
 
 .env: base.env docker-compose.yml ## Generate .env from base.env and the cred store
 	@docker -v
