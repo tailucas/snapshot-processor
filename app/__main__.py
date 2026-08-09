@@ -1006,8 +1006,8 @@ class ObjectDetector(ZmqRelay):
         self._od_enabled = app_config.getboolean("snapshots", "object_detection_enabled")
         self._rekog: Any = None
         self._path_cache: LRUCache = LRUCache(maxsize=128)
-        self._local_model: Any = None
-        self._minimum_human_confidence = app_config.getfloat("human_detection", "minimum_confidence")
+        self._local_model: YOLO = None
+        self._minimum_confidence = app_config.getfloat("object_detection", "minimum_confidence")
 
     def startup(self):
         self._rekog = boto3.client("rekognition", region_name=app_config.get("rekognition", "region"))
@@ -1050,7 +1050,7 @@ class ObjectDetector(ZmqRelay):
                 im = Image.open(BytesIO(image_bytes))
                 results = None
                 try:
-                    results = self._local_model(im)
+                    results = self._local_model.predict(source=im, conf=self._minimum_confidence)
                 except Exception:
                     log.exception("Local detection error.")
                 if results:
@@ -1064,7 +1064,7 @@ class ObjectDetector(ZmqRelay):
                             label_name = detect_dict["name"]
                             label_confidence = float(detect_dict["confidence"])
                             labels.append((label_name, label_confidence))
-                            if label_name == "person" and label_confidence >= self._minimum_human_confidence:
+                            if label_name in ["person", "face"]:
                                 person_detected = True
                                 person_count += 1
                         if person_detected:
@@ -1129,7 +1129,7 @@ class ObjectDetector(ZmqRelay):
                             label_name = detect_dict["Name"]
                             label_confidence = float(detect_dict["Confidence"])
                             labels.append((label_name, label_confidence))
-                            if label_name == "Person" and label_confidence >= self._minimum_human_confidence:
+                            if label_name == "Person" and label_confidence >= self._minimum_confidence:
                                 # if instances are provided, sum them
                                 num_instances = len(detect_dict["Instances"])
                                 if num_instances > 0:
