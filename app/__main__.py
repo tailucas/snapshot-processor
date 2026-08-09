@@ -1055,6 +1055,7 @@ class ObjectDetector(ZmqRelay):
                     log.exception("Local detection error.")
                 if results:
                     # find Person labels
+                    person_detected = False
                     person_count = 0
                     face_count = 0
                     labels = []
@@ -1102,8 +1103,14 @@ class ObjectDetector(ZmqRelay):
                             "snapshot_path": snapshot_path,
                         },
                     )
-                    if person_count > 0:
-                        additional_info = f"{person_count} person(s), {face_count} face(s), and {len(labels)} things"
+                    if person_detected:
+                        additional_info = ""
+                        if person_count > 0:
+                            additional_info += f"{person_count} person(s)"
+                        if face_count > 0:
+                            if len(additional_info) > 0:
+                                additional_info += ", "
+                            additional_info += f"{face_count} face(s)"
                         event_detail = f"{device_label} ({image_source}): {additional_info}."
                         log.debug(
                             "Object detection event detail",
