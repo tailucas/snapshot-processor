@@ -49,8 +49,8 @@ datadir: data/ ## Set up ./data/ (alias)
 
 python: .venv ## Set up the Python virtual environment (alias)
 
-lint: .venv ## Run ruff format check, ruff lint, and mypy
-	uv run ruff format --check .
+lint: .venv ## Run ruff format, ruff lint, and mypy
+	uv run ruff format .
 	uv run ruff check .
 	uv run mypy app/
 

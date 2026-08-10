@@ -5,6 +5,7 @@ import logging
 import os
 import os.path
 import threading
+import time
 from abc import ABCMeta, abstractmethod
 from datetime import UTC, datetime, timedelta
 from http.client import BadStatusLine, IncompleteRead
@@ -37,11 +38,13 @@ from pydrive2.drive import GoogleDrive
 from pydrive2.files import ApiRequestError, FileNotUploadedError
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException, Timeout
+from sentry_sdk import metrics
 from sentry_sdk.integrations.asyncio import AsyncioIntegration
 from sentry_sdk.integrations.logging import ignore_logger
 from sentry_sdk.integrations.sys_exit import SysExitIntegration
 from sentry_sdk.integrations.threading import ThreadingIntegration
 from ultralytics import YOLO
+from ultralytics.engine.results import Results
 from watchdog.events import (
     FileClosedEvent,
     FileModifiedEvent,
@@ -262,6 +265,7 @@ class Snapshot(ZmqRelay):
         # grab a first frame for overall context
         for tries in range(1, 4):
             try:
+                start_time = time.time() * 1000
                 r = requests.get(
                     f"http://{camera_config.url}/cgi-bin/CGIProxy.fcgi",
                     params={
@@ -270,6 +274,13 @@ class Snapshot(ZmqRelay):
                         "pwd": camera_config.password,
                     },
                     timeout=4,
+                )
+                end_time = time.time() * 1000
+                metrics.distribution(
+                    name="capture_time",
+                    value=end_time - start_time,
+                    unit="milliseconds",
+                    attributes={"device_key": device_key, "device_label": device_label},
                 )
                 image_data = r.content
                 im = Image.open(BytesIO(image_data))
@@ -1006,17 +1017,30 @@ class ObjectDetector(ZmqRelay):
         self._od_enabled = app_config.getboolean("snapshots", "object_detection_enabled")
         self._rekog: Any = None
         self._path_cache: LRUCache = LRUCache(maxsize=128)
-        self._local_model: YOLO = None
+        self._local_model: YOLO | None = None
         self._minimum_confidence = app_config.getfloat("object_detection", "minimum_confidence")
 
     def startup(self):
-        self._rekog = boto3.client("rekognition", region_name=app_config.get("rekognition", "region"))
-        model_name = app_config.get("object_detection", "model")
+        if is_flag_enabled(FEATURE_FLAG_OBJECT_DETECTION) and is_flag_enabled(FEATURE_FLAG_CLOUD_OBJECT_DETECTION):
+            self._rekog = boto3.client("rekognition", region_name=app_config.get("rekognition", "region"))
+        model_url = app_config.get("object_detection", "model_url")
+        if model_url and len(model_url) > 0:
+            log.info(
+                "Using Ultralytics model for local object detection",
+                extra={"model_url": model_url},
+            )
+            self._local_model = YOLO(model_url)
+        else:
+            model_name = app_config.get("object_detection", "model_name")
+            log.info(
+                "Using Ultralytics model for local object detection",
+                extra={"model_name": model_name},
+            )
+            self._local_model = YOLO(model_name)
         log.info(
-            "Using Ultralytics model for local object detection",
-            extra={"model_name": model_name},
+            "classes available",
+            extra={"class_count": len(self._local_model.names), "class_names": self._local_model.names},
         )
-        self._local_model = YOLO(model_name)
 
     def process_message(self, sink_socket):
         (publisher_topic, publisher_data) = self.socket.recv_pyobj()
@@ -1046,11 +1070,19 @@ class ObjectDetector(ZmqRelay):
                 "Detecting objects in cached image",
                 extra={"image_source": image_source, "snapshot_path": snapshot_path},
             )
-            if is_flag_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION):
+            if is_flag_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION) and self._local_model is not None:
                 im = Image.open(BytesIO(image_bytes))
                 results = None
                 try:
+                    start_time = time.time() * 1000
                     results = self._local_model.predict(source=im, conf=self._minimum_confidence)
+                    end_time = time.time() * 1000
+                    metrics.distribution(
+                        name="detect_time",
+                        value=end_time - start_time,
+                        unit="milliseconds",
+                        attributes={"device_label": device_label},
+                    )
                 except Exception:
                     log.exception("Local detection error.")
                 if results:
@@ -1060,12 +1092,20 @@ class ObjectDetector(ZmqRelay):
                     face_count = 0
                     labels = []
                     for result in results:
+                        if not isinstance(result, Results):
+                            continue
                         person_detected = False
                         for detect_dict in result.summary():
                             log.debug("Local inference", extra={"inference": detect_dict})
                             label_name = detect_dict["name"]
                             label_confidence = float(detect_dict["confidence"])
                             labels.append((label_name, label_confidence))
+                            metrics.distribution(
+                                name="detect_confidence",
+                                value=label_confidence * 100,
+                                unit="percent",
+                                attributes={"label_name": label_name},
+                            )
                             if "person" in label_name:
                                 person_detected = True
                                 person_count += 1
@@ -1117,7 +1157,7 @@ class ObjectDetector(ZmqRelay):
                             extra={"event_detail": event_detail},
                         )
                         input_device["event_detail"] = additional_info
-            elif is_flag_enabled(FEATURE_FLAG_CLOUD_OBJECT_DETECTION):
+            elif self._rekog is not None:
                 log.debug(
                     "Detecting objects in cached image",
                     extra={"image_source": image_source, "snapshot_path": snapshot_path},
@@ -1209,6 +1249,7 @@ def main():
     sentry_sdk.init(
         dsn=sentry_dsn,
         enable_logs=True,
+        enable_metrics=True,
         integrations=[
             AsyncioIntegration(),
             SysExitIntegration(capture_successful_exits=True),
