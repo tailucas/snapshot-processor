@@ -341,11 +341,19 @@ class Snapshot(ZmqRelay):
                 },
             )
             # send image data for processing
+            start_time = time.time() * 1000
             sink_socket.send_pyobj(
                 (
                     f"event.notify.{self._mq_device_topic}.{DEVICE_NAME}.image",
                     publisher_data,
                 )
+            )
+            end_time = time.time() * 1000
+            metrics.distribution(
+                name="snapshot_handoff_time",
+                value=end_time - start_time,
+                unit="milliseconds",
+                attributes={"device_key": device_key, "device_label": device_label},
             )
             log.debug(
                 "Saving image data",
