@@ -81,10 +81,6 @@ FEATURE_FLAG_CLOUD_STORAGE_MANAGEMENT = "cloud-storage-management"
 HEARTBEAT_INTERVAL_SECONDS = 5
 
 
-# reduce ultralytics logging noise
-ignore_logger(name="ultralytics")
-
-
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
     return os.path.join(parent_path, f"{operation}_" + str(unix_timestamp) + "." + file_extension)
 
@@ -1257,6 +1253,8 @@ def main():
         ],
         send_default_pii=True,
     )
+    # reduce ultralytics logging noise
+    ignore_logger(name="ultralytics")
     # control listener
     mq_server_address = app_config.get("rabbitmq", "server_address")
     mq_exchange_name = app_config.get("rabbitmq", "mq_exchange")
