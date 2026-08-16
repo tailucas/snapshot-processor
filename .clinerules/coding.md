@@ -2,86 +2,72 @@
 paths:
   - "app/**"
   - "pyproject.toml"
+  - "*.sh"
   - "Dockerfile"
 ---
 
 # snapshot-processor Coding Standards
 
-Message-driven image pipeline: fetches snapshots from IP cameras (Foscam CGI),
-ingests uploads via FTP and file-system events, runs object detection
-(Ultralytics YOLO locally and/or AWS Rekognition, feature-flagged), uploads
-and archives images in Google Drive, and publishes device events to RabbitMQ.
+snapshot-processor is a **Python-only** application extending the
+`tailucas/base-app` template. It is a snapshot processor for IP cameras: it
+fetches images via HTTP, watches for FTP uploads, runs object detection
+(YOLO locally and/or AWS Rekognition), and archives snapshots to Google
+Drive. The codebase is deliberately small and readable: the core
+application lives in `app/__main__.py` with a separate FTP server module.
 
 ## 1. Posture
 
-- Extends base-app; depends on `tailucas-pylib[aws,creds,monitoring,mq]`.
-  Follow pylib's coding and logging standards.
-- Pipeline stages are threads connected by ZMQ inproc URLs; failures in one
-  stage must not wedge the others (retry with backoff, then skip with a
-  WARNING).
+- **Derivative-app-first.** This project is a consumer of the base-app
+  template and its `tailucas_pylib` framework; prefer the pylib patterns over
+  re-implementing machinery (threading, ZMQ sockets, OTEL setup, logging).
+- **Boring and explicit.** Boilerplate is a feature: entrypoints, setup
+  scripts, and configuration stay readable and copy-paste-able.
 
-## 2. Architecture (`app/__main__.py`)
+## 2. Python Application (`app/`)
 
-ZMQ topology (`URL_WORKER_*` constants):
+- The app follows the `tailucas_pylib` framework: `AppThread`/`ZmqRelay`
+  subclasses, ZMQ inproc transport (`URL_WORKER_APP`, `URL_WORKER_OBJECT_DETECTOR`,
+  `URL_WORKER_RABBIT_PUBLISHER`, `URL_WORKER_CLOUD_STORAGE`),
+  `exception_handler` for socket lifecycles, `SignalHandler` + `thread_nanny`
+  + `die()`/`bye()` shutdown. OTEL provider setup happens automatically when
+  `tailucas_pylib` is imported (see `observability.md`).
+- Core pipeline classes in `app/__main__.py`:
+  - `Snapshot` (a `ZmqRelay`): receives camera trigger events, fetches an
+    image from the IP camera over HTTP, saves it, and forwards the image for
+    object detection.
+  - `ObjectDetector` (a `ZmqRelay`): runs YOLO (local Ultralytics model) or
+    AWS Rekognition (cloud) object detection and relays results toward
+    RabbitMQ; renames snapshots on person detection.
+  - `UploadEventHandler`: a watchdog file-system handler that watches the
+    FTP upload directory and pushes new snapshots into the pipeline.
+  - `GoogleDriveUploader`/`GoogleDriveArchiver`: asynchronous upload of
+    snapshots to Google Drive and periodic archival into year/month/day
+    folders.
+  - `app/ftp_server.py` provides the FTP upload server using `pyftpdlib`.
+- Dependencies are managed with `uv` (`pyproject.toml`, `uv.lock`); depend on
+  `tailucas-pylib[...]` extras, never vendored copies. Lint with
+  `make lint` (`ruff format .`, `ruff check .`, `mypy app/`) before
+  considering work done.
+- Sentry is initialized in `main()` after credential validation; OTEL
+  providers are set up by the pylib import (see `observability.md`).
 
-- `Snapshot(ZmqRelay)` — consumes trigger events (`event.trigger.*`), fetches
-  images from camera CGI endpoints (3 tries), validates image format via PIL,
-  saves to the snapshot root, forwards to the object detector.
-- `UploadEventHandler(watchdog)` — watches the snapshot root; maps
-  directories → device events; pushes detection work to the detector socket
-  and uploads to cloud storage; LRU `_path_cache` prevents duplicate
-  processing.
-- `ObjectDetector(ZmqRelay)` — YOLO (local) and/or Rekognition (cloud)
-  person/object detection; renames snapshots (`fetch` → `detect`/`human`),
-  attaches `event_detail`, forwards publisher payloads to the RabbitMQ relay.
-- `GoogleDriveUploader(AppThread, GoogleDriveManager)` — uploads with checksum
-  and size verification; trashes corrupted uploads and signals retry.
-- `GoogleDriveArchiver(AppThread, GoogleDriveManager)` — daily archival into
-  year/month/day folders; starred files keep existing parents.
-- `RabbitMQRelay` / `ZMQListener` (pylib) — event publication and control
-  ingestion.
+## 3. Configuration & Environment
 
-Rules:
+Configuration, secrets, and the `.env` → `config_interpol` flow are documented
+in `config.md`. The container lifecycle, entrypoint layering, and supervised
+program generation are documented in `container.md`.
 
-- New pipeline stages: subclass `ZmqRelay`/`AppThread`, register with the
-  thread nanny, use `exception_handler` for socket lifecycle.
-- Cloud/HTTP calls get bounded retries and explicit WARNING logs with
-  structured fields before retrying or giving up.
-- Feature flags (`object-detection`, `local-object-detection`,
-  `cloud-object-detection`, `cloud-storage-management`) gate optional stages;
-  always log which flag/config disabled a stage.
+## 4. Build & Run
 
-## 3. Auxiliary Entry Points
+The Makefile build graph and the Python toolchain conventions are documented
+in `build.md`. The Docker build (base-image extension + ML stack install) and
+run-as-user conventions are documented in `container.md`.
 
-- `app/ftp_server.py` — pyftpdlib server writing into the snapshot root
-  (uploads then flow through the watchdog path); credentials from 1Password
-  (`FTP/username`, `FTP/password`).
-- `app/gauth_configure.py` — interactive Google OAuth bootstrap writing the
-  creds file referenced by `[gdrive] creds_file`.
+## 5. Cross-cutting Rules
 
-## 4. Configuration & Credentials
-
-- `app.conf` sections: `camera`, `snapshots`, `gdrive`, `rekognition`,
-  `object_detection`, `human_detection`, `rabbitmq`, `ftp`, `input_type`,
-  `input_location`, `output_type`, `output_location`.
-- AWS credentials via pylib `aws` extra (boto session with role assumption);
-  Google creds file managed by `gauth_configure`; RabbitMQ address from
-  config. Never log credential contents.
-
-## 5. Correctness Notes
-
-- Timestamps: image file names encode the capture time; keep
-  `create_snapshot_path` and the file-name parsing in
-  `UploadEventHandler.on_fs_event` in sync.
-- Detection results mutate file names; the `_path_cache` and `fetch`/`detect`/
-  `human` path markers prevent re-processing loops — preserve these guards
-  when touching the pipeline.
-- Rekognition `InvalidImageFormatException` is expected noise (WARNING with
-  `exc_info`), not a Sentry exception.
-
-## 6. Testing & Lint
-
-- Ruff per `pyproject.toml` (`select = F,E,W,B,I,UP`, line length default);
-  keep new code clean and do not add new violations.
-- Compile-check all entry points after changes
-  (`python -m py_compile app/*.py`).
+- Logging is structured via pylib (static message + `extra` key/value fields,
+  JSON output) — see `logging.md`.
+- Graceful shutdown is mandatory: signal handling, resource teardown, OTEL
+  flush (`die()` calls `tracing.shutdown()`).
+- New integrations get a feature switch (env var or `app.conf` section) so
+  the app stays runnable with zero external dependencies.

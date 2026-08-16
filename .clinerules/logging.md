@@ -1,78 +1,69 @@
 ---
 paths:
   - "app/**"
+  - "pyproject.toml"
 ---
 
 # Structured Logging Standard (snapshot-processor)
 
-All logging is **structured**: a static event message plus an `extra` dict of
-`snake_case` fields. Interpolated log messages (f-strings, `%`-args,
-`.format()`, concatenation) are prohibited.
+All code in this project logs in **structured** style: a static event
+message plus key/value fields. Interpolation (f-strings, `%`/`{}`
+placeholders, concatenation) should be avoided and used only for descriptive
+scalars with no query value of their own (e.g. a count embedded for
+readability). Never interpolate secrets or untrusted data into a message.
 
-## The Logger
+## Python (`app/`)
+
+The logger comes from the shared library:
 
 ```python
 from tailucas_pylib import log
-```
 
-JSON output (python-json-logger) configured by `tailucas_pylib`: stdout below
-ERROR, stderr from ERROR up; `SYSLOG_ADDRESS` routes INFO+ to syslog when set.
-Every `extra` key becomes a top-level JSON field.
-
-## The Pattern
-
-```python
+log.info("Sink socket started", extra={"zmq_url": self._zmq_url})
 log.info(
-    "Fetching image data from IP camera",
-    extra={"device_label": device_label, "camera_url": camera_config.url},
-)
-log.warning(
-    "Google Drive problem uploading file",
-    extra={"file_path": file_path, "error": str(e)},
-)
-log.info(
-    "YOLO labels found",
-    extra={
-        "label_count": len(labels),
-        "device_label": device_label,
-        "labels": labels,
-        "snapshot_path": snapshot_path,
-    },
+    "Startup complete",
+    extra={"env_var_count": len(env_vars), "env_vars": env_vars},
 )
 ```
 
-Never:
+Rules:
 
-```python
-log.info(f"Saving {device_label} image data to {output_filename}...")
-log.exception(f"Problem saving image to {output_filename}: {e!s}")
-log.info(message.format("RabbitMQ control"))
-```
+1. Static message describing the event; all data in `extra` as a dict with
+   `snake_case` keys.
+2. Prefer a static message with data in `extra`. Interpolation is acceptable
+   only for a descriptive scalar (e.g. a count or an identifier already
+   present elsewhere in the record). Never interpolate secrets.
+3. Exceptions: `log.exception("Static message", extra={...})` or
+   `exc_info=True`.
+4. Never log secrets (use masked hints or `*_set` booleans).
+5. Output is JSON (python-json-logger) via pylib: stdout below ERROR, stderr
+   from ERROR up; `SYSLOG_ADDRESS` routes INFO+ to syslog when configured.
 
-## Rules
+## Levels
 
-1. **Static message; data in `extra`** with `snake_case` keys and
-   JSON-friendly values (`str(...)`, lists of tuples for label sets, etc.).
-2. **Pipeline stage events** read as verbs: "Fetching image data...",
-   "Sending image for object detection", "Uploaded file to Google Drive
-   folder", "Archiving file", "Renaming snapshot after person detection".
-   Keep stage identity in fields (`image_source`, `snapshot_path`,
-   `device_label`).
-3. **Exceptions:** `log.exception("Static message", extra={...})` for fatal
-   stage errors; `log.warning(..., exc_info=True)` for expected/recoverable
-   ones (e.g. Rekognition image format errors). Include `"error": str(e)`
-   when no traceback is attached.
-4. **Retry visibility:** log a WARNING with attempt context before each retry
-   ("Problem getting image. Retrying...", extra with `camera_url`, `error`)
-   and a final WARNING when giving up (extra with `tries`).
-5. **Cloud storage integrity:** upload verification logs carry
-   `file_base_name`, `upload_file_id`, expected/uploaded sizes and checksums
-   as separate fields.
-6. **Never log credentials** (Google tokens, 1Password values); the FTP
-   handler logs usernames but never passwords.
-7. **Shutdown sequence** uses explicit static messages per component
-   ("Shutting down RabbitMQ control listener...", "Shutting down RabbitMQ
-   relay...", "Shutting down application threads...").
-8. **Levels.** DEBUG for drive/inference internals; INFO for pipeline stage
-   transitions and detection results; WARNING for retries, duplicates,
-   corrupted files; ERROR for malformed payloads and missing configuration.
+Choose the level by the *consequence* of the event, not by how interesting it
+is. Default to the lowest level that still tells the story, and follow
+**one event = one line**: a single logical event produces a single structured
+record with all context in its fields.
+
+| Level | Use |
+|---|---|
+| DEBUG | The default for routine, per-message/per-iteration detail: internal state, field values, step-by-step progress. Safe to drop in production. |
+| INFO | An action of consequence to an upstream or downstream dependency — e.g. taking an action, triggering a mutation, a state transition, or a lifecycle boundary (startup/shutdown). Something an operator would want to see in normal operation. |
+| WARNING | A non-error variation of normal logic, or a situation where the correct action is ambiguous: retries, fallbacks, degraded mode, unexpected-but-handled input. Execution continues. |
+| ERROR | An exception or condition where normal execution cannot continue — e.g. returning after catching an exception, or abandoning a unit of work. |
+| CRITICAL | The process is about to exit or is in an unrecoverable app-level state. Reserved for fatal failures. |
+
+### Exception handling
+
+- **Log once, at the boundary.** Do not log-and-rethrow the same exception at
+  every layer. Log where the error is handled (or where execution stops), and
+  let the telemetry carry the rest of the context.
+- **Non-recoverable errors must be captured in the trace.** For every ERROR
+  where execution cannot continue, record the exception on the active OTEL
+  span — `record_exception(exc)` (from `tailucas_pylib.tracing`, invoked
+  automatically by `exception_handler` and available for explicit use) — so
+  the failure is queryable in the trace, not only in the log.
+- **Recoverable problems are WARNING, not ERROR.** A retry that succeeds is
+  a WARNING (or DEBUG if routine); escalate to ERROR only when the work is
+  abandoned.

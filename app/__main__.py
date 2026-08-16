@@ -21,12 +21,14 @@ from urllib.request import pathname2url
 import boto3
 import dateutil.parser
 import requests
-import sentry_sdk
+import umsgpack as msgpack
 import zmq
 from botocore.exceptions import EndpointConnectionError
 from cachetools import LRUCache
 from googleapiclient.errors import HttpError
 from httplib2.error import HttpLib2Error
+from opentelemetry import metrics, propagate, trace
+from opentelemetry.context import Context
 from pika.exceptions import (
     AMQPConnectionError,
     ConnectionClosedByBroker,
@@ -38,11 +40,6 @@ from pydrive2.drive import GoogleDrive
 from pydrive2.files import ApiRequestError, FileNotUploadedError
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException, Timeout
-from sentry_sdk import metrics
-from sentry_sdk.integrations.asyncio import AsyncioIntegration
-from sentry_sdk.integrations.logging import ignore_logger
-from sentry_sdk.integrations.sys_exit import SysExitIntegration
-from sentry_sdk.integrations.threading import ThreadingIntegration
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
 from watchdog.events import (
@@ -57,7 +54,7 @@ from zmq import ContextTerminated
 from tailucas_pylib import APP_NAME, DEVICE_NAME, app_config, log, threads
 from tailucas_pylib.app import AppThread, ZmqRelay
 from tailucas_pylib.aws.metrics import post_count_metric
-from tailucas_pylib.creds import Creds
+from tailucas_pylib.data import make_payload
 from tailucas_pylib.datetime import (
     make_iso_timestamp,
     make_timestamp,
@@ -67,11 +64,54 @@ from tailucas_pylib.handler import exception_handler
 from tailucas_pylib.process import SignalHandler
 from tailucas_pylib.rabbit import RabbitMQRelay, ZMQListener
 from tailucas_pylib.threads import bye, die, thread_nanny
+from tailucas_pylib.tracing import record_exception
 from tailucas_pylib.zmq import URL_WORKER_APP, Closable, try_close, zmq_socket, zmq_term
 
 URL_WORKER_RABBIT_PUBLISHER = "inproc://rabbitmq-publisher"
 URL_WORKER_OBJECT_DETECTOR = "inproc://object-detector"
 URL_WORKER_CLOUD_STORAGE = "inproc://cloud-storage"
+
+TRACEPARENT_KEY = "traceparent"
+BAGGAGE_KEY = "baggage"
+
+meter = metrics.get_meter(APP_NAME)
+tracer = trace.get_tracer(APP_NAME)
+
+capture_time_histogram = meter.create_histogram(
+    name="capture_time",
+    description="Time to capture an image from an IP camera",
+    unit="ms",
+)
+snapshot_handoff_time_histogram = meter.create_histogram(
+    name="snapshot_handoff_time",
+    description="Time to hand a snapshot off over ZMQ",
+    unit="ms",
+)
+detect_time_histogram = meter.create_histogram(
+    name="detect_time",
+    description="Time to run object detection on a snapshot",
+    unit="ms",
+)
+detect_confidence_histogram = meter.create_histogram(
+    name="detect_confidence",
+    description="Confidence of a detected object label",
+    unit="1",
+)
+
+
+def inject_context(context: Context | None = None) -> dict[str, str]:
+    """Inject the current (or given) trace context into a carrier dict."""
+    carrier: dict[str, str] = {}
+    propagate.inject(carrier, context=context)
+    return carrier
+
+
+def extract_context(carrier: dict[str, str] | None) -> Context:
+    """Extract a trace context from a carrier dict, or return the current context."""
+    if carrier is None:
+        return propagate.extract({})
+    return propagate.extract(carrier)
+
 
 FEATURE_FLAG_OBJECT_DETECTION = "object-detection"
 FEATURE_FLAG_CLOUD_OBJECT_DETECTION = "cloud-object-detection"
@@ -226,6 +266,10 @@ class Snapshot(ZmqRelay):
 
     def process_message(self, sink_socket):
         control_payload = self.socket.recv_pyobj()
+        if isinstance(control_payload, tuple) and len(control_payload) == 2:
+            control_payload, carrier = control_payload
+        else:
+            carrier = None
         if (
             not isinstance(control_payload, dict)
             or "snapshot" not in control_payload
@@ -238,136 +282,140 @@ class Snapshot(ZmqRelay):
         device_key = output_trigger["device_key"]
         device_label = output_trigger["device_label"]
         device_params = output_trigger["device_params"]
-        if device_key not in self.cameras:
-            log.error("Camera configuration missing", extra={"device_label": device_label})
-            post_count_metric("Errors")
-            return
-        try:
-            camera_config = CameraConfig(
-                device_key=device_key,
-                device_label=device_label,
-                camera_config=device_params,
-                camera_storage=self.cameras[device_key]["storage"],
-            )
-        except AssertionError:
-            post_count_metric("Errors")
-            return
-        log.debug(
-            "Fetching image data from IP camera",
-            extra={"device_label": device_label, "camera_url": camera_config.url},
-        )
-        image_data = None
-        im = None
-        # grab a first frame for overall context
-        for tries in range(1, 4):
+        context = extract_context(carrier)
+        with tracer.start_as_current_span("Snapshot.process_message", context=context) as span:
+            span.set_attribute("device_key", device_key)
+            span.set_attribute("device_label", device_label)
+            if device_key not in self.cameras:
+                log.error("Camera configuration missing", extra={"device_label": device_label})
+                post_count_metric("Errors")
+                return
             try:
-                start_time = time.time() * 1000
-                r = requests.get(
-                    f"http://{camera_config.url}/cgi-bin/CGIProxy.fcgi",
-                    params={
-                        "cmd": self.default_command,
-                        "usr": camera_config.username,
-                        "pwd": camera_config.password,
+                camera_config = CameraConfig(
+                    device_key=device_key,
+                    device_label=device_label,
+                    camera_config=device_params,
+                    camera_storage=self.cameras[device_key]["storage"],
+                )
+            except AssertionError as e:
+                record_exception(e)
+                post_count_metric("Errors")
+                return
+            span.set_attribute("camera_url", camera_config.url)
+            log.debug(
+                "Fetching image data from IP camera",
+                extra={"device_label": device_label, "camera_url": camera_config.url},
+            )
+            image_data = None
+            im = None
+            # grab a first frame for overall context
+            for tries in range(1, 4):
+                try:
+                    start_time = time.time() * 1000
+                    r = requests.get(
+                        f"http://{camera_config.url}/cgi-bin/CGIProxy.fcgi",
+                        params={
+                            "cmd": self.default_command,
+                            "usr": camera_config.username,
+                            "pwd": camera_config.password,
+                        },
+                        timeout=4,
+                    )
+                    end_time = time.time() * 1000
+                    capture_time_histogram.record(
+                        end_time - start_time,
+                        attributes={"device_key": device_key, "device_label": device_label},
+                    )
+                    image_data = r.content
+                    im = Image.open(BytesIO(image_data))
+                    if im.format is not None:
+                        break
+                    else:
+                        raise AssertionError(f"Bad image data detected: {im!s}")
+                except (
+                    OSError,
+                    ConnectionError,
+                    RequestException,
+                    AssertionError,
+                    Timeout,
+                ) as e:
+                    log.warning(
+                        "Problem getting image. Retrying...",
+                        extra={"camera_url": camera_config.url, "error": str(e)},
+                    )
+                    sleep(0.1)
+                    if tries >= 3:
+                        log.warning(
+                            "Giving up getting image",
+                            extra={
+                                "camera_url": camera_config.url,
+                                "tries": tries,
+                                "error": str(e),
+                            },
+                        )
+                        post_count_metric("Errors")
+                        break
+            if image_data is not None and im is not None and im.format is not None:
+                # construct message to publish
+                unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
+                log.debug(
+                    "Basing unix timestamp off of timestamp",
+                    extra={"unix_timestamp": unix_timestamp, "timestamp": str(timestamp)},
+                )
+                # create output file path
+                normalized_name = device_key.lower().replace(" ", "-")
+                output_filename = create_snapshot_path(
+                    parent_path=camera_config.camera_storage,
+                    operation=f"fetch_{normalized_name}",
+                    unix_timestamp=unix_timestamp,
+                    file_extension=self.default_image_format,
+                )
+                # publisher data
+                publisher_data = create_publisher_struct(
+                    device_key=device_key,
+                    device_label=device_label,
+                    image_data=image_data,
+                    image_timestamp=unix_timestamp,
+                    storage_url=self.cloud_storage_url,
+                    storage_path=output_filename,
+                )
+                log.debug(
+                    "Sending image for object detection",
+                    extra={
+                        "device_label": device_label,
+                        "image_format": im.format,
+                        "image_size": im.size,
+                        "image_mode": im.mode,
                     },
-                    timeout=4,
+                )
+                # send image data for processing
+                start_time = time.time() * 1000
+                sink_socket.send_pyobj(
+                    (
+                        f"event.notify.{self._mq_device_topic}.{DEVICE_NAME}.image",
+                        publisher_data,
+                        inject_context(),
+                    )
                 )
                 end_time = time.time() * 1000
-                metrics.distribution(
-                    name="capture_time",
-                    value=end_time - start_time,
-                    unit="milliseconds",
+                snapshot_handoff_time_histogram.record(
+                    end_time - start_time,
                     attributes={"device_key": device_key, "device_label": device_label},
                 )
-                image_data = r.content
-                im = Image.open(BytesIO(image_data))
-                if im.format is not None:
-                    break
-                else:
-                    raise AssertionError(f"Bad image data detected: {im!s}")
-            except (
-                OSError,
-                ConnectionError,
-                RequestException,
-                AssertionError,
-                Timeout,
-            ) as e:
-                log.warning(
-                    "Problem getting image. Retrying...",
-                    extra={"camera_url": camera_config.url, "error": str(e)},
+                log.debug(
+                    "Saving image data",
+                    extra={"device_label": device_label, "output_filename": output_filename},
                 )
-                sleep(0.1)
-                if tries >= 3:
-                    log.warning(
-                        "Giving up getting image",
-                        extra={
-                            "camera_url": camera_config.url,
-                            "tries": tries,
-                            "error": str(e),
-                        },
+                # persist for Cloud
+                try:
+                    im.save(output_filename)
+                except OSError as e:
+                    log.exception(
+                        "Problem saving image",
+                        extra={"output_filename": output_filename, "error": str(e)},
                     )
-                    post_count_metric("Errors")
-                    break
-        if image_data is not None and im is not None and im.format is not None:
-            # construct message to publish
-            unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
-            log.debug(
-                "Basing unix timestamp off of timestamp",
-                extra={"unix_timestamp": unix_timestamp, "timestamp": str(timestamp)},
-            )
-            # create output file path
-            normalized_name = device_key.lower().replace(" ", "-")
-            output_filename = create_snapshot_path(
-                parent_path=camera_config.camera_storage,
-                operation=f"fetch_{normalized_name}",
-                unix_timestamp=unix_timestamp,
-                file_extension=self.default_image_format,
-            )
-            # publisher data
-            publisher_data = create_publisher_struct(
-                device_key=device_key,
-                device_label=device_label,
-                image_data=image_data,
-                image_timestamp=unix_timestamp,
-                storage_url=self.cloud_storage_url,
-                storage_path=output_filename,
-            )
-            log.debug(
-                "Sending image for object detection",
-                extra={
-                    "device_label": device_label,
-                    "image_format": im.format,
-                    "image_size": im.size,
-                    "image_mode": im.mode,
-                },
-            )
-            # send image data for processing
-            start_time = time.time() * 1000
-            sink_socket.send_pyobj(
-                (
-                    f"event.notify.{self._mq_device_topic}.{DEVICE_NAME}.image",
-                    publisher_data,
-                )
-            )
-            end_time = time.time() * 1000
-            metrics.distribution(
-                name="snapshot_handoff_time",
-                value=end_time - start_time,
-                unit="milliseconds",
-                attributes={"device_key": device_key, "device_label": device_label},
-            )
-            log.debug(
-                "Saving image data",
-                extra={"device_label": device_label, "output_filename": output_filename},
-            )
-            # persist for Cloud
-            try:
-                im.save(output_filename)
-            except OSError as e:
-                log.exception(
-                    "Problem saving image",
-                    extra={"output_filename": output_filename, "error": str(e)},
-                )
-                die(e)
+                    record_exception(e)
+                    die(e)
 
 
 class DeviceEvent:
@@ -1047,7 +1095,12 @@ class ObjectDetector(ZmqRelay):
         )
 
     def process_message(self, sink_socket):
-        (publisher_topic, publisher_data) = self.socket.recv_pyobj()
+        received = self.socket.recv_pyobj()
+        if isinstance(received, tuple) and len(received) == 3:
+            publisher_topic, publisher_data, carrier = received
+        else:
+            publisher_topic, publisher_data = received
+            carrier = None
         input_device = publisher_data["inputs"][0]
         device_label = input_device["device_label"]
         snapshot_path = input_device["storage_path"]
@@ -1067,130 +1120,71 @@ class ObjectDetector(ZmqRelay):
             with open(snapshot_path, "rb") as img_file:
                 image_bytes = img_file.read()
             image_source = "upload"
-        # find objects using the specified model
-        event_detail = None
-        if is_flag_enabled(FEATURE_FLAG_OBJECT_DETECTION) and self._od_enabled:
-            log.debug(
-                "Detecting objects in cached image",
-                extra={"image_source": image_source, "snapshot_path": snapshot_path},
-            )
-            if is_flag_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION) and self._local_model is not None:
-                im = Image.open(BytesIO(image_bytes))
-                results = None
-                try:
-                    start_time = time.time() * 1000
-                    results = self._local_model.predict(source=im, conf=self._minimum_confidence)
-                    end_time = time.time() * 1000
-                    metrics.distribution(
-                        name="detect_time",
-                        value=end_time - start_time,
-                        unit="milliseconds",
-                        attributes={"device_label": device_label},
-                    )
-                except Exception:
-                    log.exception("Local detection error.")
-                if results:
-                    # find Person labels
-                    person_detected = False
-                    person_count = 0
-                    face_count = 0
-                    labels = []
-                    for result in results:
-                        if not isinstance(result, Results):
-                            continue
-                        person_detected = False
-                        for detect_dict in result.summary():
-                            log.debug("Local inference", extra={"inference": detect_dict})
-                            label_name = detect_dict["name"]
-                            label_confidence = float(detect_dict["confidence"])
-                            labels.append((label_name, label_confidence))
-                            metrics.distribution(
-                                name="detect_confidence",
-                                value=label_confidence * 100,
-                                unit="percent",
-                                attributes={"label_name": label_name},
-                            )
-                            if "person" in label_name:
-                                person_detected = True
-                                person_count += 1
-                            if "face" in label_name:
-                                person_detected = True
-                                face_count += 1
-                        if person_detected:
-                            detect_filename = snapshot_path.replace("fetch", "detect")
-                            log.debug(
-                                "Saving person detection result",
-                                extra={"detect_filename": detect_filename},
-                            )
-                            try:
-                                result.save(filename=detect_filename)
-                            except Exception:
-                                log.exception(
-                                    "Unable to save detection result",
-                                    extra={"detect_filename": detect_filename},
-                                )
-                            human_detect_filename = snapshot_path.replace("fetch", "human")
-                            log.debug(
-                                "Renaming snapshot after person detection",
-                                extra={
-                                    "snapshot_path": snapshot_path,
-                                    "human_detect_filename": human_detect_filename,
-                                },
-                            )
-                            os.rename(snapshot_path, human_detect_filename)
-                    log.debug(
-                        "YOLO labels found",
-                        extra={
-                            "label_count": len(labels),
-                            "device_label": device_label,
-                            "labels": labels,
-                            "snapshot_path": snapshot_path,
-                        },
-                    )
-                    if person_detected:
-                        additional_info = ""
-                        if person_count > 0:
-                            additional_info += f"{person_count} person(s)"
-                        if face_count > 0:
-                            if len(additional_info) > 0:
-                                additional_info += ", "
-                            additional_info += f"{face_count} face(s)"
-                        event_detail = f"{device_label} ({image_source}): {additional_info}."
-                        log.debug(
-                            "Object detection event detail",
-                            extra={"event_detail": event_detail},
-                        )
-                        input_device["event_detail"] = additional_info
-            elif self._rekog is not None:
+        context = extract_context(carrier)
+        with tracer.start_as_current_span("ObjectDetector.process_message", context=context) as span:
+            span.set_attribute("device_label", device_label)
+            span.set_attribute("image_source", image_source)
+            span.set_attribute("snapshot_path", snapshot_path)
+            # find objects using the specified model
+            event_detail = None
+            if is_flag_enabled(FEATURE_FLAG_OBJECT_DETECTION) and self._od_enabled:
                 log.debug(
                     "Detecting objects in cached image",
                     extra={"image_source": image_source, "snapshot_path": snapshot_path},
                 )
-                try:
-                    response = self._rekog.detect_labels(Image={"Bytes": image_bytes})
-                    log.debug(
-                        "Rekognition response",
-                        extra={
-                            "device_label": device_label,
-                            "image_source": image_source,
-                            "response": response,
-                        },
-                    )
-                    # find Person labels
-                    person_count = 0
-                    labels = []
-                    if "Labels" in response:
-                        for detect_dict in response["Labels"]:
-                            label_name = detect_dict["Name"]
-                            label_confidence = float(detect_dict["Confidence"])
-                            labels.append((label_name, label_confidence))
-                            if label_name == "Person" and label_confidence >= self._minimum_confidence:
-                                # if instances are provided, sum them
-                                num_instances = len(detect_dict["Instances"])
-                                if num_instances > 0:
-                                    person_count += num_instances
-                                else:
+                if is_flag_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION) and self._local_model is not None:
+                    im = Image.open(BytesIO(image_bytes))
+                    results = None
+                    try:
+                        start_time = time.time() * 1000
+                        results = self._local_model.predict(source=im, conf=self._minimum_confidence)
+                        end_time = time.time() * 1000
+                        detect_time_histogram.record(
+                            end_time - start_time,
+                            attributes={"device_label": device_label},
+                        )
+                    except Exception as e:
+                        log.exception("Local detection error.")
+                        record_exception(e)
+                    if results:
+                        # find Person labels
+                        person_detected = False
+                        person_count = 0
+                        face_count = 0
+                        labels = []
+                        for result in results:
+                            if not isinstance(result, Results):
+                                continue
+                            person_detected = False
+                            for detect_dict in result.summary():
+                                log.debug("Local inference", extra={"inference": detect_dict})
+                                label_name = detect_dict["name"]
+                                label_confidence = float(detect_dict["confidence"])
+                                labels.append((label_name, label_confidence))
+                                detect_confidence_histogram.record(
+                                    label_confidence * 100,
+                                    attributes={"label_name": label_name},
+                                )
+                                if "person" in label_name:
+                                    person_detected = True
                                     person_count += 1
+                                if "face" in label_name:
+                                    person_detected = True
+                                    face_count += 1
+                            if person_detected:
+                                detect_filename = snapshot_path.replace("fetch", "detect")
+                                log.debug(
+                                    "Saving person detection result",
+                                    extra={"detect_filename": detect_filename},
+                                )
+                                try:
+                                    result.save(filename=detect_filename)
+                                except Exception as e:
+                                    log.exception(
+                                        "Unable to save detection result",
+                                        extra={"detect_filename": detect_filename},
+                                    )
+                                    record_exception(e)
                                 human_detect_filename = snapshot_path.replace("fetch", "human")
                                 log.debug(
                                     "Renaming snapshot after person detection",
@@ -1201,73 +1195,180 @@ class ObjectDetector(ZmqRelay):
                                 )
                                 os.rename(snapshot_path, human_detect_filename)
                         log.debug(
-                            "Rekognition labels found",
+                            "YOLO labels found",
                             extra={
                                 "label_count": len(labels),
                                 "device_label": device_label,
-                                "image_source": image_source,
                                 "labels": labels,
+                                "snapshot_path": snapshot_path,
                             },
                         )
-                    if person_count > 0:
-                        additional_info = f"{person_count} person(s) and {len(labels)} things"
-                        event_detail = f"{device_label} ({image_source}): {additional_info}."
+                        if person_detected:
+                            additional_info = ""
+                            if person_count > 0:
+                                additional_info += f"{person_count} person(s)"
+                            if face_count > 0:
+                                if len(additional_info) > 0:
+                                    additional_info += ", "
+                                additional_info += f"{face_count} face(s)"
+                            event_detail = f"{device_label} ({image_source}): {additional_info}."
+                            log.debug(
+                                "Object detection event detail",
+                                extra={"event_detail": event_detail},
+                            )
+                            input_device["event_detail"] = additional_info
+                elif self._rekog is not None:
+                    log.debug(
+                        "Detecting objects in cached image",
+                        extra={"image_source": image_source, "snapshot_path": snapshot_path},
+                    )
+                    try:
+                        response = self._rekog.detect_labels(Image={"Bytes": image_bytes})
                         log.debug(
-                            "Object detection event detail",
-                            extra={"event_detail": event_detail},
+                            "Rekognition response",
+                            extra={
+                                "device_label": device_label,
+                                "image_source": image_source,
+                                "response": response,
+                            },
                         )
-                        input_device["event_detail"] = additional_info
-                except self._rekog.exceptions.InvalidImageFormatException:
-                    log.warning("Rekognition image format error.", exc_info=True)
-                except EndpointConnectionError as e:
-                    raise ResourceWarning("Rekognition problem.") from e
-                except Exception:
-                    log.exception("Rekognition error.")
+                        # find Person labels
+                        person_count = 0
+                        labels = []
+                        if "Labels" in response:
+                            for detect_dict in response["Labels"]:
+                                label_name = detect_dict["Name"]
+                                label_confidence = float(detect_dict["Confidence"])
+                                labels.append((label_name, label_confidence))
+                                if label_name == "Person" and label_confidence >= self._minimum_confidence:
+                                    # if instances are provided, sum them
+                                    num_instances = len(detect_dict["Instances"])
+                                    if num_instances > 0:
+                                        person_count += num_instances
+                                    else:
+                                        person_count += 1
+                                    human_detect_filename = snapshot_path.replace("fetch", "human")
+                                    log.debug(
+                                        "Renaming snapshot after person detection",
+                                        extra={
+                                            "snapshot_path": snapshot_path,
+                                            "human_detect_filename": human_detect_filename,
+                                        },
+                                    )
+                                    os.rename(snapshot_path, human_detect_filename)
+                            log.debug(
+                                "Rekognition labels found",
+                                extra={
+                                    "label_count": len(labels),
+                                    "device_label": device_label,
+                                    "image_source": image_source,
+                                    "labels": labels,
+                                },
+                            )
+                        if person_count > 0:
+                            additional_info = f"{person_count} person(s) and {len(labels)} things"
+                            event_detail = f"{device_label} ({image_source}): {additional_info}."
+                            log.debug(
+                                "Object detection event detail",
+                                extra={"event_detail": event_detail},
+                            )
+                            input_device["event_detail"] = additional_info
+                    except self._rekog.exceptions.InvalidImageFormatException:
+                        log.warning("Rekognition image format error.", exc_info=True)
+                    except EndpointConnectionError as e:
+                        raise ResourceWarning("Rekognition problem.") from e
+                    except Exception as e:
+                        log.exception("Rekognition error.")
+                        record_exception(e)
+                else:
+                    log.debug(
+                        "No viable object detection methods. Check feature flags.",
+                        extra={"image_source": image_source, "snapshot_path": snapshot_path},
+                    )
             else:
                 log.debug(
-                    "No viable object detection methods. Check feature flags.",
-                    extra={"image_source": image_source, "snapshot_path": snapshot_path},
+                    "Not detecting objects due to feature flag or config",
+                    extra={
+                        "image_source": image_source,
+                        "snapshot_path": snapshot_path,
+                        "feature_flag": FEATURE_FLAG_OBJECT_DETECTION,
+                    },
                 )
-        else:
             log.debug(
-                "Not detecting objects due to feature flag or config",
-                extra={
-                    "image_source": image_source,
-                    "snapshot_path": snapshot_path,
-                    "feature_flag": FEATURE_FLAG_OBJECT_DETECTION,
-                },
+                "Sending detection data",
+                extra={"device_label": device_label, "publisher_topic": publisher_topic},
             )
-        log.debug(
-            "Sending detection data",
-            extra={"device_label": device_label, "publisher_topic": publisher_topic},
-        )
-        sink_socket.send_pyobj((publisher_topic, publisher_data))
+            sink_socket.send_pyobj((publisher_topic, publisher_data, inject_context()))
+
+
+class TracingZMQListener(ZMQListener):
+    """ZMQListener that extracts traceparent/baggage from the msgpack body and
+    forwards the trace context over ZMQ so downstream spans can continue it."""
+
+    def callback(self, ch, method, properties, body):
+        topic = method.routing_key
+        log.debug("Message received", extra={"topic": topic, "message_bytes": len(body)})
+        topic_parts = topic.split(".")
+        if len(topic_parts) < 3:
+            log.debug(
+                "Ignoring non-routable message due to unsufficient topic parts",
+                extra={"topic": topic},
+            )
+            return
+        if topic_parts[1] not in ["heartbeat", "leader"]:
+            log.debug("Device event on topic", extra={"topic": topic})
+        device_event = None
+        try:
+            device_event = msgpack.unpackb(body)
+        except Exception:
+            log.exception("Bad message", extra={"body": body})
+            return
+        if not isinstance(device_event, dict):
+            log.debug("Ignoring non-dict message body", extra={"topic": topic})
+            return
+        carrier = {}
+        for key in (TRACEPARENT_KEY, BAGGAGE_KEY):
+            if key in device_event:
+                carrier[key] = device_event.pop(key)
+        try:
+            self.processor.send_pyobj(({topic_parts[2]: device_event}, carrier))
+        except Exception as e:
+            log.debug(self.__class__.__name__, exc_info=True)
+            if not threads.shutting_down:
+                raise e
+
+
+class TracingRabbitMQRelay(RabbitMQRelay):
+    """RabbitMQRelay that injects the current trace context into the msgpack
+    body so outbound RabbitMQ messages carry traceparent/baggage."""
+
+    def process_message(self, zmq_socket):
+        received = zmq_socket.recv_pyobj()
+        if isinstance(received, tuple) and len(received) == 3:
+            event_topic, event_payload, carrier = received
+        else:
+            event_topic, event_payload = received
+            carrier = None
+        context = extract_context(carrier)
+        if isinstance(event_payload, dict):
+            event_payload = dict(event_payload)
+            event_payload.update(inject_context(context=context))
+        try:
+            self._mq_channel.basic_publish(
+                exchange=self._mq_config_exchange,
+                routing_key=event_topic,
+                body=make_payload(data=event_payload),  # type: ignore
+            )
+        except (ConnectionClosedByBroker, StreamLostError) as e:
+            raise ResourceWarning() from e
 
 
 def main():
-    creds = Creds()
-    creds.validate_creds()
-    # sentry instrumentation
-    log.debug("Loading Sentry.io instrumentation...")
-    sentry_dsn = creds.get_creds(app_config.get("creds", "sentry_dsn").replace("__APP_NAME__", APP_NAME))
-    sentry_sdk.init(
-        dsn=sentry_dsn,
-        enable_logs=True,
-        enable_metrics=True,
-        integrations=[
-            AsyncioIntegration(),
-            SysExitIntegration(capture_successful_exits=True),
-            ThreadingIntegration(propagate_scope=True),
-        ],
-        send_default_pii=True,
-    )
-    # reduce ultralytics logging noise
-    ignore_logger(name="ultralytics")
     # control listener
     mq_server_address = app_config.get("rabbitmq", "server_address")
     mq_exchange_name = app_config.get("rabbitmq", "mq_exchange")
     mq_device_topic = app_config.get("rabbitmq", "device_topic")
-    mq_control_listener = ZMQListener(
+    mq_control_listener = TracingZMQListener(
         zmq_url=URL_WORKER_APP,
         mq_server_address=mq_server_address,
         mq_exchange_name=f"{mq_exchange_name}_control",
@@ -1276,7 +1377,7 @@ def main():
     )
     # RabbitMQ relay
     try:
-        mq_relay = RabbitMQRelay(
+        mq_relay = TracingRabbitMQRelay(
             zmq_url=URL_WORKER_RABBIT_PUBLISHER,
             mq_server_address=mq_server_address,
             mq_exchange_name=mq_exchange_name,
