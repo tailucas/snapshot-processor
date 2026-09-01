@@ -343,7 +343,7 @@ class Snapshot(ZmqRelay):
                         AssertionError,
                         Timeout,
                     ) as e:
-                        log.warning(
+                        log.debug(
                             "Problem getting image. Retrying...",
                             extra={"camera_url": camera_config.url, "error": str(e)},
                         )
@@ -903,7 +903,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                     f.Trash()
                     break
                 except (BrokenPipeError, JSONDecodeError, ConnectionResetError, SSLError) as e:
-                    log.warning(
+                    log.debug(
                         "Problem trashing file. Retrying...",
                         extra={"upload_file_id": upload_file_id, "error": str(e)},
                     )
