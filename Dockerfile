@@ -10,36 +10,33 @@ RUN locale-gen ${LANGUAGE} \
     && locale-gen ${LANG} \
     && update-locale \
     && locale -a
-# user scripts
-COPY backup_auth_token.sh .
+# start-up and maintenance scripts (rarely change)
+COPY backup_auth_token.sh app_entrypoint.sh ./
 # cron jobs
-RUN rm -f ./config/cron/base_job
 COPY config/cron/backup_auth_token ./config/cron/
 COPY config/cron/cleanup_snapshots ./config/cron/
-# apply override
-RUN "${APP_DIR}/app_setup.sh"
-COPY config ./config
-COPY settings.yaml .
-COPY uv.lock pyproject.toml .python-version ./
-RUN chown app:app uv.lock
-# Ultralytics
-RUN mkdir -p /home/app/.config/Ultralytics
-# Matplotlib
-RUN mkdir -p /home/app/.config/matplotlib
-RUN chown -R app:app /home/app/.config/
+# remove base cron job and register ours
+RUN rm -f ./config/cron/base_job \
+    && "${APP_DIR}/app_setup.sh"
+# dependency files (changes trigger expensive re-install)
+COPY --chown=app:app pyproject.toml uv.lock .python-version ./
+# create config directories for ML libraries
+RUN mkdir -p /home/app/.config/Ultralytics /home/app/.config/matplotlib \
+    && chown -R app:app /home/app/.config/
 # switch to user
 USER app
+# install main Python dependencies
 RUN "${APP_DIR}/python_setup.sh"
+# install object detection stack
 # https://docs.ultralytics.com/quickstart/#custom-installation-methods
 # https://docs.astral.sh/uv/guides/integration/pytorch/#configuring-accelerators-with-optional-dependencies
 RUN uv pip install ultralytics --no-deps && \
   uv pip install opencv-python-headless && \
   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
   uv pip install numpy matplotlib polars pyyaml pillow psutil requests scipy ultralytics-thop
+# configuration (frequent changes, but only invalidates the cheap COPY layers below)
+COPY settings.yaml .
+COPY config ./config
 # add the project application
-COPY app/__main__.py ./app/
-COPY app/ftp_server.py ./app/
-COPY app/gauth_configure.py ./app/
-# override entrypoint
-COPY app_entrypoint.sh .
+COPY --chown=app:app app/ ./app/
 CMD ["/opt/app/entrypoint.sh"]
