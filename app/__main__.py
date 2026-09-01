@@ -310,51 +310,55 @@ class Snapshot(ZmqRelay):
             im = None
             # grab a first frame for overall context
             for tries in range(1, 4):
-                try:
-                    start_time = time.time() * 1000
-                    r = requests.get(
-                        f"http://{camera_config.url}/cgi-bin/CGIProxy.fcgi",
-                        params={
-                            "cmd": self.default_command,
-                            "usr": camera_config.username,
-                            "pwd": camera_config.password,
-                        },
-                        timeout=4,
-                    )
-                    end_time = time.time() * 1000
-                    capture_time_histogram.record(
-                        end_time - start_time,
-                        attributes={"device_key": device_key, "device_label": device_label},
-                    )
-                    image_data = r.content
-                    im = Image.open(BytesIO(image_data))
-                    if im.format is not None:
-                        break
-                    else:
-                        raise AssertionError(f"Bad image data detected: {im!s}")
-                except (
-                    OSError,
-                    ConnectionError,
-                    RequestException,
-                    AssertionError,
-                    Timeout,
-                ) as e:
-                    log.warning(
-                        "Problem getting image. Retrying...",
-                        extra={"camera_url": camera_config.url, "error": str(e)},
-                    )
-                    sleep(0.1)
-                    if tries >= 3:
-                        log.warning(
-                            "Giving up getting image",
-                            extra={
-                                "camera_url": camera_config.url,
-                                "tries": tries,
-                                "error": str(e),
+                with tracer.start_as_current_span("Snapshot.capture_image") as capture_span:
+                    capture_span.set_attribute("device_label", device_label)
+                    capture_span.set_attribute("camera_url", camera_config.url)
+                    capture_span.set_attribute("capture_attempt", tries)
+                    try:
+                        start_time = time.time() * 1000
+                        r = requests.get(
+                            f"http://{camera_config.url}/cgi-bin/CGIProxy.fcgi",
+                            params={
+                                "cmd": self.default_command,
+                                "usr": camera_config.username,
+                                "pwd": camera_config.password,
                             },
+                            timeout=4,
                         )
-                        post_count_metric("Errors")
-                        break
+                        end_time = time.time() * 1000
+                        capture_time_histogram.record(
+                            end_time - start_time,
+                            attributes={"device_key": device_key, "device_label": device_label},
+                        )
+                        image_data = r.content
+                        im = Image.open(BytesIO(image_data))
+                        if im.format is not None:
+                            break
+                        else:
+                            raise AssertionError(f"Bad image data detected: {im!s}")
+                    except (
+                        OSError,
+                        ConnectionError,
+                        RequestException,
+                        AssertionError,
+                        Timeout,
+                    ) as e:
+                        log.warning(
+                            "Problem getting image. Retrying...",
+                            extra={"camera_url": camera_config.url, "error": str(e)},
+                        )
+                        sleep(0.1)
+                        if tries >= 3:
+                            log.warning(
+                                "Giving up getting image",
+                                extra={
+                                    "camera_url": camera_config.url,
+                                    "tries": tries,
+                                    "error": str(e),
+                                },
+                            )
+                            post_count_metric("Errors")
+                            break
             if image_data is not None and im is not None and im.format is not None:
                 # construct message to publish
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
