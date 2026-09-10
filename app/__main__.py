@@ -638,7 +638,7 @@ class GoogleDriveArchiver(AppThread, GoogleDriveManager):
                 SSLEOFError,
                 TimeoutError,
             ) as e:
-                log.warning(
+                log.debug(
                     "Google Drive problem archiving files. Will try again in a minute.",
                     extra={
                         "gdrive_folder": self._gdrive_folder,
@@ -809,7 +809,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             SSLEOFError,
             TimeoutError,
         ) as e:
-            log.warning(
+            log.debug(
                 "Google Drive problem uploading file",
                 extra={"file_path": file_path, "error": str(e)},
             )
@@ -836,7 +836,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         if "fileSize" in f:
             upload_size = int(f["fileSize"])
             if upload_size != file_size:
-                log.warning(
+                log.debug(
                     "Upload file size mismatch",
                     extra={
                         "file_base_name": file_base_name,
@@ -879,7 +879,7 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                                 },
                             )
                         else:
-                            log.warning(
+                            log.debug(
                                 "Upload checksum mismatch",
                                 extra={
                                     "file_base_name": file_base_name,
@@ -1215,6 +1215,15 @@ class ObjectDetector(ZmqRelay):
                                 if len(additional_info) > 0:
                                     additional_info += ", "
                                 additional_info += f"{face_count} face(s)"
+                                log.info(
+                                    "Face detected",
+                                    extra={
+                                        "device_label": device_label,
+                                        "image_source": image_source,
+                                        "face_count": face_count,
+                                        "snapshot_path": snapshot_path,
+                                    },
+                                )
                             event_detail = f"{device_label} ({image_source}): {additional_info}."
                             log.debug(
                                 "Object detection event detail",
@@ -1474,7 +1483,7 @@ def main():
                 gdrive_folder_url=google_drive_uploader.cloud_storage_url,
             )
         except HttpLib2Error:
-            log.warning(
+            log.debug(
                 "Google Drive will be unavailable until the next restart.",
                 exc_info=True,
             )
