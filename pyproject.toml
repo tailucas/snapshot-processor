@@ -56,9 +56,12 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [project.scripts]
+ftp = "app.ftp_server:main"
 gauth_configure = "app.gauth_configure:main"
 aws_configure = "tailucas_pylib.tools.aws_configure:main"
-config_interpol = "tailucas_pylib.tools.config_interpol:main"
+# shadows tailucas_pylib's tool to keep its import-time logging off stdout, see
+# app/config_interpol.py: base_entrypoint.sh redirects this command into a file
+config_interpol = "app.config_interpol:main"
 cred_tool = "tailucas_pylib.tools.cred_tool:main"
 yaml_interpol = "tailucas_pylib.tools.yaml_interpol:main"
 

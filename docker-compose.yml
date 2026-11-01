@@ -24,6 +24,8 @@ services:
     hostname: ${DEVICE_NAME:-base-app}
     ports:
       - "21:21"
+      # FTP passive (PASV) data ports; keep in step with FTP_PASV_MIN/MAX_PORT
+      - "30000-30009:30000-30009"
       # pydrive2
       - "8080:8080"
       - "8090:8090"

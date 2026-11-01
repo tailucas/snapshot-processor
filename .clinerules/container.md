@@ -62,6 +62,19 @@ exec env supervisord -n -c /opt/app/supervisord.conf
   - runs `gauth_configure` (interactive Google OAuth flow) if no token file
     exists.
 
+**Gotcha — `config_interpol` output is redirected into a config file.** The
+inherited `base_entrypoint.sh` does
+`uv run --frozen --no-sync config_interpol < config/app.conf > /opt/app/app.conf`.
+`tailucas_pylib` attaches its JSON log handler to `sys.stdout` at import and logs
+while importing, so with a verbose `LOG_LEVEL` those records land in the file
+ahead of the interpolated config; the library's own `app_config.read()` then
+fails with `configparser.MissingSectionHeaderError`, and because the entrypoints
+are *sourced* under `set -e`, `app_entrypoint.sh` never runs and the container
+exits. The fork therefore shadows the pylib console script with
+`app/config_interpol.py`, which imports the library with `sys.stdout` pointed at
+stderr (see `[project.scripts]` in `pyproject.toml`). Do not reintroduce a plain
+`print()`/stdout logger in that path.
+
 The same split applies at build time: **`app_setup.sh`** (inherited from the
 base image) registers the cron files; the fork does not ship its own
 `base_setup.sh`.

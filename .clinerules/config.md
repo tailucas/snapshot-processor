@@ -71,6 +71,11 @@ section so the app runs with zero external dependencies:
 - Runtime programs: `NO_PYTHON_APP`, `NO_CRON` (see `container.md`), and
   `RUN_FTP_SERVER` (the FTP server program appended by
   `app_entrypoint.sh`).
+- FTP passive mode: `FTP_PASV_MIN_PORT`/`FTP_PASV_MAX_PORT` (default
+  `30000-30009`, must also be published in `docker-compose.yml`) and
+  `FTP_MASQUERADE_ADDRESS` (the address advertised to clients; required when
+  the container sits behind Docker's NAT, otherwise clients are handed the
+  container's private address and transfers stall after login).
 - Object detection: `OBJECT_DETECTION_ENABLED` and the pylib managed feature
   flags `object-detection`, `cloud-object-detection`, `local-object-detection`,
   `cloud-storage-management` (resolved via 1Password `flags/...` entries).
