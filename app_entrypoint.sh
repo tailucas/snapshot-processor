@@ -33,6 +33,14 @@ command=uv run --frozen --no-sync ftp
 directory=/opt/app/
 user=app
 autorestart=unexpected
+stopwaitsecs=30
+stdout_events_enabled=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_events_enabled=true
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+redirect_stderr=false
 EOF
 fi
 

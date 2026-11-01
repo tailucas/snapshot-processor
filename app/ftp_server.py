@@ -1,5 +1,7 @@
 #!/usr/bin/env python
+import logging
 import os
+import sys
 
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
@@ -24,8 +26,30 @@ class SnapshotFTPHandler(FTPHandler):
         log.info("FTP received partial file. Removing...", extra={"file": file})
         os.remove(file)
 
+    def ftp_DELE(self, path):
+        # Cameras delete the destination name before storing a snapshot. A 550
+        # for a file that was never there makes them abort the upload and retry
+        # in a tight loop, so treat the delete of a missing path as a success.
+        if not self.fs.lexists(path):
+            log.debug("FTP delete of missing file treated as success", extra={"path": path})
+            self.respond("250 File removed.")
+            return None
+        return super().ftp_DELE(path)
+
 
 def main():
+    # pyftpdlib logs every single FTP command at INFO (to stderr). Attaching our
+    # own handler keeps it from installing that default configuration, and the
+    # level keeps per-command chatter out of the logs. Raise FTP_LOG_LEVEL to
+    # INFO or DEBUG when diagnosing a client.
+    pyftpdlib_logger = logging.getLogger("pyftpdlib")
+    if not pyftpdlib_logger.handlers:
+        pyftpdlib_handler = logging.StreamHandler(stream=sys.stderr)
+        pyftpdlib_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+        pyftpdlib_logger.addHandler(pyftpdlib_handler)
+    ftp_log_level = os.getenv("FTP_LOG_LEVEL", "WARNING").upper()
+    pyftpdlib_logger.setLevel(getattr(logging, ftp_log_level, logging.WARNING))
+
     # Instantiate a dummy authorizer for managing 'virtual' users
     authorizer = DummyAuthorizer()
 
