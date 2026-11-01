@@ -60,18 +60,38 @@ is also supported). These rules document what a fork must preserve.
 
 ## 3. Metrics in this project
 
-The application does **not** create OTEL instruments. Its operational metrics
-are:
+The application creates **synchronous OTEL instruments** from the module-level
+`meter = metrics.get_meter(APP_NAME)` in `app/__main__.py`. Its operational
+metrics are:
 
-- **Sentry metrics** (`sentry_sdk.metrics.distribution`): `capture_time`,
-  `snapshot_handoff_time`, `detect_time`, `detect_confidence` — emitted from
-  `Snapshot` and `ObjectDetector` in `app/__main__.py`.
+- **OTEL gauges** (`meter.create_gauge`, recorded with `.set()`): `capture_time`,
+  `snapshot_handoff_time`, `detect_time` (all `ms`) and `detect_confidence`
+  (`%`). Emitted from `Snapshot` and `ObjectDetector` in `app/__main__.py`.
+- **OTEL counter** (`meter.create_counter`): `image_source`, incremented once
+  per image entering the pipeline, tagged `source=fetch|upload` and
+  `device=<normalised device label>`.
 - **CloudWatch counters** (`tailucas_pylib.aws.metrics.post_count_metric`):
   `Errors` and similar counters posted to the `automation` namespace.
 
-The pylib `monitoring` extra still wires OTEL metric readers
-(`PeriodicExportingMetricReader`, 60s default interval) so OTEL metrics
-*can* be added later without changing the bootstrap. If OTEL instruments are
+**Rule — prefer gauges over histograms.** A histogram multiplies every
+attribute set by the explicit bucket boundaries (the SDK default has 14, i.e.
+15 buckets) plus count/sum/min/max series; an instrument such as
+`detect_confidence` tagged with the ~80 YOLO/Rekognition class names therefore
+produced thousands of series. Gauges record a **single last-value-per-attribute-
+set** series. The tradeoff is deliberate: gauges do **not** carry
+p50/p95/p99 or peak latency, so do not base a latency percentile dashboard on
+them — reach for a histogram (with a *narrow* attribute set) if that is needed.
+
+**Rule — device tags are normalised.** `normalize_device_name()` lowercases a
+device label and replaces every run of non-alphanumerics with `_`
+(`"Back Door"` → `back_door`), so all metrics share one device vocabulary and
+can be joined. Tag with this value under the `device` key; do not pass the
+human-readable label or the derived `device_key` (`"Back Door camera"`) as an
+attribute — that doubles cardinality for no query value.
+
+The pylib `monitoring` extra wires the OTEL metric readers
+(`PeriodicExportingMetricReader`, 60s default interval), so a gauge's value is
+the **last** sample recorded in each export window. If OTEL instruments are
 introduced, follow the pylib conventions: create tracers/meters/instruments
 after the providers are registered (thread constructors run after import),
 and prefer a short export interval (~10s) in demo code so data appears

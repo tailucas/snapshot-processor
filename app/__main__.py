@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import os.path
+import re
 import threading
 import time
 from abc import ABCMeta, abstractmethod
@@ -77,26 +78,53 @@ BAGGAGE_KEY = "baggage"
 meter = metrics.get_meter(APP_NAME)
 tracer = trace.get_tracer(APP_NAME)
 
-capture_time_histogram = meter.create_histogram(
+# device labels are human readable ("Back Door"); metrics want a stable, lower
+# case tag so that every metric can be joined on the same device vocabulary
+_DEVICE_NAME_SEPARATORS = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_device_name(device_name: str) -> str:
+    """Normalise a device label into a standard, lower-case metric attribute value."""
+    normalized = _DEVICE_NAME_SEPARATORS.sub("_", str(device_name).strip().lower()).strip("_")
+    return normalized or "unknown"
+
+
+# gauges (last value per attribute set) rather than histograms: a histogram
+# multiplies every attribute set by the bucket boundaries plus count/sum/min/max,
+# which is a lot of series for a single-value measurement
+capture_time_gauge = meter.create_gauge(
     name="capture_time",
     description="Time to capture an image from an IP camera",
     unit="ms",
 )
-snapshot_handoff_time_histogram = meter.create_histogram(
+snapshot_handoff_time_gauge = meter.create_gauge(
     name="snapshot_handoff_time",
     description="Time to hand a snapshot off over ZMQ",
     unit="ms",
 )
-detect_time_histogram = meter.create_histogram(
+detect_time_gauge = meter.create_gauge(
     name="detect_time",
     description="Time to run object detection on a snapshot",
     unit="ms",
 )
-detect_confidence_histogram = meter.create_histogram(
+detect_confidence_gauge = meter.create_gauge(
     name="detect_confidence",
     description="Confidence of a detected object label",
+    unit="%",
+)
+image_source_counter = meter.create_counter(
+    name="image_source",
+    description="Images entering the pipeline, by source and device",
     unit="1",
 )
+
+
+def record_image_source(image_source: str, device_label: str) -> None:
+    """Count one ingested image, tagged with its source and normalised device name."""
+    image_source_counter.add(
+        1,
+        attributes={"source": image_source, "device": normalize_device_name(device_label)},
+    )
 
 
 def inject_context(context: Context | None = None) -> dict[str, str]:
@@ -326,9 +354,9 @@ class Snapshot(ZmqRelay):
                             timeout=4,
                         )
                         end_time = time.time() * 1000
-                        capture_time_histogram.record(
+                        capture_time_gauge.set(
                             end_time - start_time,
-                            attributes={"device_key": device_key, "device_label": device_label},
+                            attributes={"device": normalize_device_name(device_label)},
                         )
                         image_data = r.content
                         im = Image.open(BytesIO(image_data))
@@ -362,6 +390,7 @@ class Snapshot(ZmqRelay):
             if image_data is not None and im is not None and im.format is not None:
                 # construct message to publish
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
+                record_image_source(image_source="fetch", device_label=device_label)
                 log.debug(
                     "Basing unix timestamp off of timestamp",
                     extra={"unix_timestamp": unix_timestamp, "timestamp": str(timestamp)},
@@ -402,9 +431,9 @@ class Snapshot(ZmqRelay):
                     )
                 )
                 end_time = time.time() * 1000
-                snapshot_handoff_time_histogram.record(
+                snapshot_handoff_time_gauge.set(
                     end_time - start_time,
-                    attributes={"device_key": device_key, "device_label": device_label},
+                    attributes={"device": normalize_device_name(device_label)},
                 )
                 log.debug(
                     "Saving image data",
@@ -1054,6 +1083,10 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
             )
             # start processing the image data
             if snapshot_path.lower().endswith(".jpg") and "object" not in snapshot_path:
+                record_image_source(
+                    image_source="upload",
+                    device_label=device_event.device_location or device_event.device_key,
+                )
                 self.socket.send_pyobj(
                     (
                         f"event.notify.{self._mq_device_topic}.{DEVICE_NAME}",
@@ -1156,9 +1189,9 @@ class ObjectDetector(ZmqRelay):
                         start_time = time.time() * 1000
                         results = self._local_model.predict(source=im, conf=self._minimum_confidence)
                         end_time = time.time() * 1000
-                        detect_time_histogram.record(
+                        detect_time_gauge.set(
                             end_time - start_time,
-                            attributes={"device_label": device_label},
+                            attributes={"device": normalize_device_name(device_label)},
                         )
                     except Exception as e:
                         log.exception("Local detection error.")
@@ -1178,7 +1211,7 @@ class ObjectDetector(ZmqRelay):
                                 label_name = detect_dict["name"]
                                 label_confidence = float(detect_dict["confidence"])
                                 labels.append((label_name, label_confidence))
-                                detect_confidence_histogram.record(
+                                detect_confidence_gauge.set(
                                     label_confidence * 100,
                                     attributes={"label_name": label_name},
                                 )
