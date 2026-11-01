@@ -148,6 +148,12 @@ FEATURE_FLAG_CLOUD_STORAGE_MANAGEMENT = "cloud-storage-management"
 
 HEARTBEAT_INTERVAL_SECONDS = 5
 
+# an upload is written in chunks, so a file system event can fire before the
+# snapshot is complete; wait briefly for the file to stop growing before
+# reading it
+SNAPSHOT_READ_ATTEMPTS = 10
+SNAPSHOT_READ_DELAY_SECONDS = 0.2
+
 
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
     return os.path.join(parent_path, f"{operation}_" + str(unix_timestamp) + "." + file_extension)
@@ -957,8 +963,12 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
 
         self._mq_device_topic = mq_device_topic
         self._path_cache: LRUCache = LRUCache(maxsize=128)
+        self._pipeline_enabled = True
 
     def start(self):
+        # Closable creates the pipeline socket lazily and on_fs_event() sends on
+        # it, so it has to exist before the observer can dispatch any event
+        self.get_socket()
         # start the file system monitor
         self.cloud_storage_socket = zmq_socket(socket_type=zmq.PUSH)
         self.cloud_storage_socket.connect(URL_WORKER_CLOUD_STORAGE)
@@ -976,6 +986,14 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
     @cloud_storage_url.setter
     def cloud_storage_url(self, cloud_storage_url):
         self._cloud_storage_url = cloud_storage_url
+
+    @property
+    def pipeline_enabled(self):
+        return self._pipeline_enabled
+
+    @pipeline_enabled.setter
+    def pipeline_enabled(self, pipeline_enabled):
+        self._pipeline_enabled = pipeline_enabled
 
     def add_image_dir(self, device_key, device_type, device_location, image_dir):
         if image_dir in self.device_events:
@@ -1042,6 +1060,30 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
             )
             record_exception(e)
 
+    def _notify_object_detection(self, device_event, snapshot_path: str) -> None:
+        """Hand an uploaded snapshot to the object detection pipeline."""
+        device_label = device_event.device_location or device_event.device_key
+        unix_timestamp = int((device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
+        publisher_data = create_publisher_struct(
+            device_key=device_event.device_key,
+            device_label=device_label,
+            image_data=None,
+            image_timestamp=unix_timestamp,
+            storage_url=self._cloud_storage_url,
+            storage_path=snapshot_path,
+        )
+        record_image_source(image_source="upload", device_label=device_label)
+        log.debug(
+            "Sending uploaded snapshot for object detection",
+            extra={"device_label": device_label, "snapshot_path": snapshot_path},
+        )
+        self.socket.send_pyobj(
+            (
+                f"event.notify.{self._mq_device_topic}.{DEVICE_NAME}.image",
+                publisher_data,
+            )
+        )
+
     def on_fs_event(self, snapshot_path: str):
         if threads.shutting_down:
             log.debug(
@@ -1052,7 +1094,6 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         if snapshot_path in self._path_cache:
             log.debug("Snapshot path already processed", extra={"snapshot_path": snapshot_path})
             return
-        self._path_cache[snapshot_path] = True
         # cross-check that we're in the right place
         if not snapshot_path.startswith(self._snapshot_root):
             log.debug("Ignored unmapped path event", extra={"snapshot_path": snapshot_path})
@@ -1070,29 +1111,29 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         date_string = " ".join(file_base_name.split("_")[2:]) if "_" in file_base_name else file_base_name
         # keep in sync with invocations of create_snapshot_path
         device_event.timestamp = date_string
+        # a failure for one downstream must not skip the other one, so each step
+        # owns its error handling; a step that fails leaves the path uncached so
+        # that a later file system event can retry it
+        processed = True
         # do not notify again for fetched image data
         if "fetch" not in snapshot_path and "detect" not in snapshot_path and "human" not in snapshot_path:
-            unix_timestamp = int((device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
-            publisher_data = create_publisher_struct(
-                device_key=device_event.device_key,
-                device_label=device_event.device_location or device_event.device_key,
-                image_data=None,
-                image_timestamp=unix_timestamp,
-                storage_url=self._cloud_storage_url,
-                storage_path=snapshot_path,
-            )
             # start processing the image data
             if snapshot_path.lower().endswith(".jpg") and "object" not in snapshot_path:
-                record_image_source(
-                    image_source="upload",
-                    device_label=device_event.device_location or device_event.device_key,
-                )
-                self.socket.send_pyobj(
-                    (
-                        f"event.notify.{self._mq_device_topic}.{DEVICE_NAME}",
-                        publisher_data,
+                if self._pipeline_enabled:
+                    try:
+                        self._notify_object_detection(device_event=device_event, snapshot_path=snapshot_path)
+                    except Exception as e:
+                        log.exception(
+                            "Failed to send snapshot for object detection",
+                            extra={"snapshot_path": snapshot_path},
+                        )
+                        record_exception(e)
+                        processed = False
+                else:
+                    log.debug(
+                        "Not sending snapshot for object detection",
+                        extra={"snapshot_path": snapshot_path},
                     )
-                )
         else:
             log.debug(
                 "Not generating redundant snapshot event",
@@ -1104,7 +1145,17 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         )
         # upload the image snapshot to Cloud
         if self.cloud_storage_socket is not None:
-            self.cloud_storage_socket.send_pyobj((snapshot_path, device_event.timestamp))
+            try:
+                self.cloud_storage_socket.send_pyobj((snapshot_path, device_event.timestamp))
+            except Exception as e:
+                log.exception(
+                    "Failed to queue snapshot for cloud storage",
+                    extra={"snapshot_path": snapshot_path},
+                )
+                record_exception(e)
+                processed = False
+        if processed:
+            self._path_cache[snapshot_path] = True
 
 
 class ObjectDetector(ZmqRelay):
@@ -1144,6 +1195,48 @@ class ObjectDetector(ZmqRelay):
             extra={"class_count": len(self._local_model.names), "class_names": self._local_model.names},
         )
 
+    @staticmethod
+    def _read_snapshot(snapshot_path: str) -> bytes | None:
+        """Read a snapshot that landed on the file system, waiting for it to settle.
+
+        Uploads arrive in chunks, so a file system event can fire while the file
+        is still incomplete. Wait for the size to stop growing before reading, and
+        give up (rather than raising) if the file never becomes readable: one bad
+        snapshot must not bring the detection thread down.
+        """
+        previous_size = None
+        for attempt in range(1, SNAPSHOT_READ_ATTEMPTS + 1):
+            try:
+                size = os.path.getsize(snapshot_path)
+            except OSError as e:
+                log.debug(
+                    "Snapshot not readable yet",
+                    extra={"snapshot_path": snapshot_path, "attempt": attempt, "error": str(e)},
+                )
+                size = None
+            if size is not None and size > 0 and size == previous_size:
+                try:
+                    with open(snapshot_path, "rb") as img_file:
+                        return img_file.read()
+                except OSError as e:
+                    log.warning(
+                        "Problem reading snapshot",
+                        extra={"snapshot_path": snapshot_path, "error": str(e)},
+                    )
+                    record_exception(e)
+                    return None
+            previous_size = size
+            sleep(SNAPSHOT_READ_DELAY_SECONDS)
+        log.warning(
+            "Snapshot never settled for reading",
+            extra={
+                "snapshot_path": snapshot_path,
+                "attempts": SNAPSHOT_READ_ATTEMPTS,
+                "size_bytes": previous_size,
+            },
+        )
+        return None
+
     def process_message(self, sink_socket):
         received = self.socket.recv_pyobj()
         if isinstance(received, tuple) and len(received) == 3:
@@ -1160,16 +1253,22 @@ class ObjectDetector(ZmqRelay):
                 extra={"snapshot_path": snapshot_path, "device_label": device_label},
             )
             return
-        self._path_cache[snapshot_path] = device_label
         image_bytes = None
         image_source = None
         if "image" in input_device:
             image_bytes = input_device["image"]
             image_source = "fetch"
         else:
-            with open(snapshot_path, "rb") as img_file:
-                image_bytes = img_file.read()
+            image_bytes = self._read_snapshot(snapshot_path=snapshot_path)
+            if image_bytes is None:
+                # leave the path uncached so that a later notification can retry
+                log.warning(
+                    "Skipping unreadable snapshot",
+                    extra={"snapshot_path": snapshot_path, "device_label": device_label},
+                )
+                return
             image_source = "upload"
+        self._path_cache[snapshot_path] = device_label
         context = extract_context(carrier)
         with tracer.start_as_current_span("ObjectDetector.process_message", context=context) as span:
             span.set_attribute("device_label", device_label)
@@ -1513,6 +1612,13 @@ def main():
     object_detector = None
     if app_config.getboolean("snapshots", "object_detection_enabled"):
         object_detector = ObjectDetector()
+    else:
+        log.warning(
+            "Not sending uploaded snapshots for object detection due to disabled config",
+            extra={"config_option": "snapshots.object_detection_enabled"},
+        )
+    # only notify the pipeline if something is consuming it
+    upload_event_handler.pipeline_enabled = object_detector is not None
     # ensure that auth is properly set up first
     google_drive_uploader = None
     google_drive_archiver = None
