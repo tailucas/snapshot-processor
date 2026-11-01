@@ -126,19 +126,19 @@ def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension)
 
 
 def create_publisher_struct(device_key, device_label, image_data, image_timestamp, storage_url, storage_path):
-    return {
-        "inputs": [
-            {
-                "device_key": device_key,
-                "device_label": device_label,
-                "type": "camera",
-                "image": image_data,
-                "image_timestamp": str(image_timestamp),
-                "storage_url": storage_url,
-                "storage_path": storage_path,
-            }
-        ]
+    input_device = {
+        "device_key": device_key,
+        "device_label": device_label,
+        "type": "camera",
+        "image_timestamp": str(image_timestamp),
+        "storage_url": storage_url,
+        "storage_path": storage_path,
     }
+    if image_data is not None:
+        input_device["image"] = image_data
+    # an absent image means "read the image from storage_path", i.e. snapshots
+    # that landed on the file system (camera upload) rather than being fetched
+    return {"inputs": [input_device]}
 
 
 class CameraConfig:
@@ -984,7 +984,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                 "File moved event",
                 extra={"src_path": src_path, "dest_path": dest_path},
             )
-            self.on_fs_event(snapshot_path=dest_path)
+            self._safe_fs_event(snapshot_path=dest_path)
 
     # if a snapshot has been fully written
     def on_closed(self, event):
@@ -998,7 +998,20 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         if isinstance(event, FileModifiedEvent):
             src_path = self._decode_path(event.src_path)
             log.debug("File modified event", extra={"src_path": src_path})
-            self.on_fs_event(snapshot_path=src_path)
+            self._safe_fs_event(snapshot_path=src_path)
+
+    def _safe_fs_event(self, snapshot_path: str):
+        # a handler exception escapes watchdog's dispatch loop and kills the
+        # observer thread (which the thread nanny then treats as fatal), so no
+        # single snapshot may be allowed to raise out of here
+        try:
+            self.on_fs_event(snapshot_path=snapshot_path)
+        except Exception as e:
+            log.exception(
+                "Failed to process file system event",
+                extra={"snapshot_path": snapshot_path},
+            )
+            record_exception(e)
 
     def on_fs_event(self, snapshot_path: str):
         if threads.shutting_down:
@@ -1032,15 +1045,15 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         if "fetch" not in snapshot_path and "detect" not in snapshot_path and "human" not in snapshot_path:
             unix_timestamp = int((device_event.timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
             publisher_data = create_publisher_struct(
-                device_key=device_event["device_key"],
-                device_label=device_event["device_label"],
-                image_data=device_event["image_data"],
+                device_key=device_event.device_key,
+                device_label=device_event.device_location or device_event.device_key,
+                image_data=None,
                 image_timestamp=unix_timestamp,
                 storage_url=self._cloud_storage_url,
                 storage_path=snapshot_path,
             )
             # start processing the image data
-            if file_base_name.endswith(".jpg") and "object" not in snapshot_path:
+            if snapshot_path.lower().endswith(".jpg") and "object" not in snapshot_path:
                 self.socket.send_pyobj(
                     (
                         f"event.notify.{self._mq_device_topic}.{DEVICE_NAME}",

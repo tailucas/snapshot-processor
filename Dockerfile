@@ -27,6 +27,14 @@ RUN mkdir -p /home/app/.config/Ultralytics /home/app/.config/matplotlib \
 USER app
 # install main Python dependencies
 RUN "${APP_DIR}/python_setup.sh"
+# The `config_interpol` console script is provided by *both* this project and
+# tailucas_pylib; uv writes one file for both, so whichever distribution is
+# installed last wins. Reinstall only this project here so the fork's wrapper
+# (app/config_interpol.py, which keeps pylib's import-time log records off the
+# stdout that base_entrypoint.sh redirects into app.conf) is the script that runs.
+# Keep this before the extra `uv pip install` layers below: a sync prunes any
+# package that is not part of the lock file.
+RUN uv sync --frozen --no-dev --reinstall-package app
 # install object detection stack
 # https://docs.ultralytics.com/quickstart/#custom-installation-methods
 # https://docs.astral.sh/uv/guides/integration/pytorch/#configuring-accelerators-with-optional-dependencies

@@ -75,6 +75,14 @@ exits. The fork therefore shadows the pylib console script with
 stderr (see `[project.scripts]` in `pyproject.toml`). Do not reintroduce a plain
 `print()`/stdout logger in that path.
 
+Because `config_interpol` exists in *both* this project and `tailucas_pylib`, uv
+writes a single script file for both distributions and the last install wins, so
+the `Dockerfile` ends the dependency installation with
+`uv sync --frozen --no-dev --reinstall-package app` to guarantee the fork's
+wrapper is the one on disk. That step must stay above the extra
+`uv pip install …` layers, because a `sync` prunes packages that are not in
+`uv.lock` (it will remove `torch`, `ultralytics`, …).
+
 The same split applies at build time: **`app_setup.sh`** (inherited from the
 base image) registers the cron files; the fork does not ship its own
 `base_setup.sh`.
