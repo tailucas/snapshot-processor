@@ -1056,6 +1056,15 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                         },
                     )
                     pending.pop(file_path, None)
+                    # this clip will never be archived; free the bytes now rather
+                    # than leaving it for the retention sweep
+                    try:
+                        os.remove(file_path)
+                    except OSError as e:
+                        log.debug(
+                            "Unable to remove discarded recording",
+                            extra={"file_path": file_path, "error": str(e)},
+                        )
                     continue
                 else:
                     continue

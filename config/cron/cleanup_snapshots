@@ -1,1 +1,7 @@
-30 * * * * find /data/ftp/uploads/ -ctime +1 | xargs -n100 rm -f
+# archive payload and anything unexpected: nothing survives two days
+30 * * * * find /data/ftp/uploads -type f -mmin +2880 -delete
+# recordings are decided within ~90 seconds (archived, or discarded by the
+# running application), so six hours of headroom covers a retry or a restart
+*/15 * * * * find /data/ftp/uploads -type f \( -path '*/record/*' -o -name '*.mkv' -o -name '*.mp4' \) -mmin +360 -delete
+# snapshots pulled from a camera are analysis input only and never archived
+*/15 * * * * find /data/ftp/uploads -type f -name 'fetch_*' -mmin +120 -delete

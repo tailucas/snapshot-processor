@@ -119,6 +119,13 @@ section so the app runs with zero external dependencies:
   A clip with no matching hit is held for `window + 30 s` (a detection may still
   be in flight) and then discarded; `GoogleDriveUploader._hold_recording()` and
   `_resolve_pending_recordings()` implement the decision.
+- Local retention (`config/cron/cleanup_snapshots`, installed into the app user's
+  crontab at build time — a rebuild is needed to change it): the archive payload
+  (`detect_*`/`human_*`) and anything unexpected survive 48 h (`-mmin +2880`,
+  swept hourly at :30); recordings (`*/record/*`, `*.mkv`, `*.mp4`) are pruned
+  after 6 h; `fetch_*` snapshots after 2 h — they are analysis input and are
+  never archived. A recording that is discarded by the gate is deleted
+  immediately. Keep clips' retention above any plausible archive retry window.
 - Object detection: `OBJECT_DETECTION_ENABLED` and the pylib managed feature
   flags `object-detection`, `cloud-object-detection`, `local-object-detection`,
   `cloud-storage-management` (resolved via 1Password `flags/...` entries).
