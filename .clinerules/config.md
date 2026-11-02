@@ -111,6 +111,14 @@ section so the app runs with zero external dependencies:
   never overwrites an upload: `create_derived_snapshot_path()` prefixes
   (`detect_<camera name>.jpg`) and `mark_human_snapshot()` copies the original to
   `human_<camera name>.jpg`.
+- Recording gate: a recording (any `video/*` upload, i.e. the `.mkv` clips) is
+  archived **only** when the same device detected a person/face within
+  `RECORDING_DETECTION_WINDOW_SECONDS` (default `60`) of the recording's
+  timestamp, on either side. Hits are tracked in `DetectionRegistry` from the
+  detector's own timestamps, so a pulled still can justify a clip and vice versa.
+  A clip with no matching hit is held for `window + 30 s` (a detection may still
+  be in flight) and then discarded; `GoogleDriveUploader._hold_recording()` and
+  `_resolve_pending_recordings()` implement the decision.
 - Object detection: `OBJECT_DETECTION_ENABLED` and the pylib managed feature
   flags `object-detection`, `cloud-object-detection`, `local-object-detection`,
   `cloud-storage-management` (resolved via 1Password `flags/...` entries).

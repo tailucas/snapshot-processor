@@ -195,6 +195,59 @@ def wait_for_settled_snapshot(snapshot_path: str) -> bool:
     return False
 
 
+# a recording is archived only when the same device detected a person/face within
+# this many seconds of the recording's timestamp (either side of it)
+RECORDING_DETECTION_WINDOW_SECONDS = int(os.getenv("RECORDING_DETECTION_WINDOW_SECONDS", "60"))
+
+# how long a recording without a matching detection is held for one to arrive:
+# the window, plus room for a still captured at the edge of it to be analysed
+RECORDING_DECISION_TIMEOUT_SECONDS = RECORDING_DETECTION_WINDOW_SECONDS + 30
+
+
+class DetectionRegistry:
+    """Recent person/face detections per device, used to gate recordings.
+
+    The detector records a hit with the capture timestamp of the image that
+    produced it; the uploader asks whether a hit falls inside the recording
+    window of a clip. Both sides use the same filename-derived timestamps, so
+    pulled and uploaded stills are directly comparable.
+    """
+
+    def __init__(self, window_seconds: int):
+        self._window_seconds = window_seconds
+        self._lock = threading.Lock()
+        self._detections: dict[str, list[float]] = {}
+
+    @property
+    def window_seconds(self) -> int:
+        return self._window_seconds
+
+    def record(self, device_key: str, epoch_timestamp: float) -> None:
+        """Remember a detection, pruning hits that have left the window."""
+        with self._lock:
+            hits = self._detections.setdefault(device_key, [])
+            hits.append(epoch_timestamp)
+            cutoff = epoch_timestamp - self._window_seconds
+            self._detections[device_key] = [hit for hit in hits if hit >= cutoff]
+
+    def has_detection(self, device_key: str, epoch_timestamp: float) -> bool:
+        """True when a detection for this device falls within the window."""
+        if device_key is None:
+            return False
+        with self._lock:
+            return any(
+                abs(hit - epoch_timestamp) <= self._window_seconds for hit in self._detections.get(device_key, [])
+            )
+
+
+detection_registry = DetectionRegistry(window_seconds=RECORDING_DETECTION_WINDOW_SECONDS)
+
+
+def is_recording(mime_type: str | None) -> bool:
+    """True for video containers, i.e. the cameras' .mkv alarm clips."""
+    return mime_type is not None and mime_type.startswith("video/")
+
+
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
     return os.path.join(parent_path, f"{operation}_" + str(unix_timestamp) + "." + file_extension)
 
@@ -896,6 +949,9 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         self._filetype = FileType()
 
     def run(self):
+        # recordings without a matching detection are held here until a
+        # detection arrives, or until the decision timeout expires
+        pending: dict[str, dict] = {}
         with exception_handler(
             connect_url=URL_WORKER_CLOUD_STORAGE,
             socket_type=zmq.PULL,
@@ -903,24 +959,44 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
             shutdown_on_error=True,
         ) as zmq_socket:
             while not threads.shutting_down:
-                (snapshot_path, snapshot_timestamp) = zmq_socket.recv_pyobj()
-                if not self._should_archive(file_path=snapshot_path):
+                # resolve held recordings before waiting for more traffic
+                self._resolve_pending_recordings(pending=pending)
+                try:
+                    message = zmq_socket.recv_pyobj(flags=zmq.NOBLOCK)
+                except zmq.Again:
+                    threads.interruptable_sleep.wait(1)
+                    continue
+                if isinstance(message, tuple) and len(message) == 3:
+                    snapshot_path, snapshot_timestamp, device_key = message
+                else:
+                    (snapshot_path, snapshot_timestamp) = message
+                    device_key = None
+                mime_type = self._filetype.mime_type(snapshot_path)
+                if not self._should_archive(file_path=snapshot_path, mime_type=mime_type):
                     log.debug(
                         "Not archiving snapshot; only detections and recordings are archived",
                         extra={"snapshot_path": snapshot_path},
+                    )
+                    continue
+                if is_recording(mime_type):
+                    self._hold_recording(
+                        file_path=snapshot_path,
+                        device_key=device_key,
+                        snapshot_timestamp=snapshot_timestamp,
+                        pending=pending,
                     )
                     continue
                 while not self.upload(file_path=snapshot_path, created_time=snapshot_timestamp):
                     # never spin
                     threads.interruptable_sleep.wait(1)
 
-    def _should_archive(self, file_path) -> bool:
+    def _should_archive(self, file_path, mime_type=None) -> bool:
         """True when a file belongs in cloud storage.
 
         Still images are the detection pipeline's input: they are analysed and
         only the derived artefacts (detect_*/human_*) are archived, whether the
         image was pulled from a camera or uploaded by one. Anything that cannot
-        be analysed - notably the cameras' .mkv alarm clips - is archived as-is.
+        be analysed - notably the cameras' .mkv alarm clips - is a candidate.
         """
         # snapshots pulled from a camera are analysis-only, exactly like the
         # camera's own still images
@@ -929,8 +1005,62 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         # derived artefacts are the archive's record of a detection
         if is_derived_snapshot(file_path):
             return True
-        mime_type = self._filetype.mime_type(file_path)
+        if mime_type is None:
+            mime_type = self._filetype.mime_type(file_path)
         return mime_type is None or not mime_type.startswith("image/")
+
+    def _hold_recording(self, file_path, device_key, snapshot_timestamp, pending) -> None:
+        """Queue a recording for the detection decision, or archive it at once."""
+        already_detected = detection_registry.has_detection(
+            device_key=device_key,
+            epoch_timestamp=snapshot_timestamp.timestamp(),
+        )
+        pending[file_path] = {
+            "deadline": time.monotonic() + RECORDING_DECISION_TIMEOUT_SECONDS,
+            "device_key": device_key,
+            "timestamp": snapshot_timestamp,
+            # without a device we cannot gate on detections, so archive it
+            "accepted": already_detected or device_key is None,
+        }
+        log.debug(
+            "Recording queued for the detection decision",
+            extra={
+                "file_path": file_path,
+                "device_key": device_key,
+                "window_seconds": detection_registry.window_seconds,
+                "already_detected": already_detected,
+            },
+        )
+
+    def _resolve_pending_recordings(self, pending) -> None:
+        """Archive held recordings that have a matching detection, drop the rest."""
+        now = time.monotonic()
+        for file_path, state in list(pending.items()):
+            if not state["accepted"]:
+                if detection_registry.has_detection(
+                    device_key=state["device_key"],
+                    epoch_timestamp=state["timestamp"].timestamp(),
+                ):
+                    log.info(
+                        "Recording has a matching person/face detection; archiving",
+                        extra={"file_path": file_path, "device_key": state["device_key"]},
+                    )
+                    state["accepted"] = True
+                elif now >= state["deadline"]:
+                    log.info(
+                        "Discarding recording; no person/face detection within the window",
+                        extra={
+                            "file_path": file_path,
+                            "device_key": state["device_key"],
+                            "window_seconds": detection_registry.window_seconds,
+                        },
+                    )
+                    pending.pop(file_path, None)
+                    continue
+                else:
+                    continue
+            if self.upload(file_path=file_path, created_time=state["timestamp"]):
+                pending.pop(file_path, None)
 
     def upload(self, file_path, created_time=None):
         # upload the snapshot
@@ -1303,7 +1433,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         # upload the image snapshot to Cloud
         if self.cloud_storage_socket is not None:
             try:
-                self.cloud_storage_socket.send_pyobj((snapshot_path, device_event.timestamp))
+                self.cloud_storage_socket.send_pyobj((snapshot_path, device_event.timestamp, device_event.device_key))
             except Exception as e:
                 log.exception(
                     "Failed to queue snapshot for cloud storage",
@@ -1484,6 +1614,12 @@ class ObjectDetector(ZmqRelay):
                                     person_detected = True
                                     face_count += 1
                             if person_detected:
+                                # only archive this device's clips when a person
+                                # or face was seen around the same time
+                                detection_registry.record(
+                                    device_key=input_device["device_key"],
+                                    epoch_timestamp=float(input_device["image_timestamp"]),
+                                )
                                 detect_filename = create_derived_snapshot_path(snapshot_path, "detect")
                                 log.debug(
                                     "Saving person detection result",
@@ -1585,6 +1721,10 @@ class ObjectDetector(ZmqRelay):
                                 },
                             )
                         if person_count > 0:
+                            detection_registry.record(
+                                device_key=input_device["device_key"],
+                                epoch_timestamp=float(input_device["image_timestamp"]),
+                            )
                             additional_info = f"{person_count} person(s) and {len(labels)} things"
                             event_detail = f"{device_label} ({image_source}): {additional_info}."
                             log.debug(
