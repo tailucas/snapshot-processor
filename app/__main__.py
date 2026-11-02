@@ -5,6 +5,7 @@ import logging
 import os
 import os.path
 import re
+import shutil
 import threading
 import time
 from abc import ABCMeta, abstractmethod
@@ -158,6 +159,38 @@ SNAPSHOT_READ_DELAY_SECONDS = 0.2
 
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
     return os.path.join(parent_path, f"{operation}_" + str(unix_timestamp) + "." + file_extension)
+
+
+def create_derived_snapshot_path(snapshot_path: str, operation: str) -> str:
+    """Sibling path for a processed copy of a snapshot.
+
+    Snapshots fetched by this application are named
+    "<operation>_<device>_<epoch>.jpg" (see create_snapshot_path), so the leading
+    "fetch_" is swapped for the new operation. Uploads keep the camera's own file
+    name, so the operation is prefixed instead: replacing "fetch" in those paths
+    is a no-op that would write over the uploaded snapshot.
+    """
+    directory, file_name = os.path.split(snapshot_path)
+    if file_name.startswith("fetch_"):
+        file_name = file_name[len("fetch_") :]
+    return os.path.join(directory, f"{operation}_{file_name}")
+
+
+def mark_human_snapshot(snapshot_path: str) -> str:
+    """Persist the "human_" marker for a snapshot that had a person detected.
+
+    Fetched snapshots are never archived, so the original is renamed (long
+    standing behaviour). An uploaded snapshot is archived as it is, so it is
+    copied instead: renaming it would leave the cloud uploader nothing to read.
+    """
+    human_path = create_derived_snapshot_path(snapshot_path, "human")
+    if human_path == snapshot_path:
+        return snapshot_path
+    if os.path.basename(snapshot_path).startswith("fetch_"):
+        os.rename(snapshot_path, human_path)
+    else:
+        shutil.copy2(snapshot_path, human_path)
+    return human_path
 
 
 def create_publisher_struct(device_key, device_label, image_data, image_timestamp, storage_url, storage_path):
@@ -838,15 +871,17 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
                     threads.interruptable_sleep.wait(1)
 
     def upload(self, file_path, created_time=None):
-        # verify the snapshot
-        try:
-            with Image.open(file_path) as img:
-                img.verify()
-        except OSError, SyntaxError:
-            log.warning("Not uploading corrupted image file", extra={"file_path": file_path})
-            return True
         # upload the snapshot
         mime_type = self._filetype.mime_type(file_path)
+        # only images can be validated as images: camera recordings such as the
+        # .mkv alarm clips are archived as they are
+        if mime_type is None or mime_type.startswith("image/"):
+            try:
+                with Image.open(file_path) as img:
+                    img.verify()
+            except OSError, SyntaxError:
+                log.warning("Not uploading corrupted image file", extra={"file_path": file_path})
+                return True
         file_size = os.path.getsize(filename=file_path)
         log.debug(
             "File ready for upload",
@@ -1371,7 +1406,7 @@ class ObjectDetector(ZmqRelay):
                                     person_detected = True
                                     face_count += 1
                             if person_detected:
-                                detect_filename = snapshot_path.replace("fetch", "detect")
+                                detect_filename = create_derived_snapshot_path(snapshot_path, "detect")
                                 log.debug(
                                     "Saving person detection result",
                                     extra={"detect_filename": detect_filename},
@@ -1384,15 +1419,14 @@ class ObjectDetector(ZmqRelay):
                                         extra={"detect_filename": detect_filename},
                                     )
                                     record_exception(e)
-                                human_detect_filename = snapshot_path.replace("fetch", "human")
+                                human_detect_filename = mark_human_snapshot(snapshot_path)
                                 log.debug(
-                                    "Renaming snapshot after person detection",
+                                    "Marked snapshot after person detection",
                                     extra={
                                         "snapshot_path": snapshot_path,
                                         "human_detect_filename": human_detect_filename,
                                     },
                                 )
-                                os.rename(snapshot_path, human_detect_filename)
                         log.debug(
                             "YOLO labels found",
                             extra={
@@ -1455,15 +1489,14 @@ class ObjectDetector(ZmqRelay):
                                         person_count += num_instances
                                     else:
                                         person_count += 1
-                                    human_detect_filename = snapshot_path.replace("fetch", "human")
+                                    human_detect_filename = mark_human_snapshot(snapshot_path)
                                     log.debug(
-                                        "Renaming snapshot after person detection",
+                                        "Marked snapshot after person detection",
                                         extra={
                                             "snapshot_path": snapshot_path,
                                             "human_detect_filename": human_detect_filename,
                                         },
                                     )
-                                    os.rename(snapshot_path, human_detect_filename)
                             log.debug(
                                 "Rekognition labels found",
                                 extra={

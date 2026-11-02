@@ -96,6 +96,15 @@ section so the app runs with zero external dependencies:
   as `HMDAlarm_20261102-105249.jpg`/`MDAlarm_20261101_063000.jpg`, which carry
   local time without an offset. Files this application writes itself use a
   `<operation>_<device>_<unix epoch>.jpg` name and are unaffected.
+- Uploaded artefacts: only `.jpg` uploads are fed to object detection; camera
+  recordings (the `.mkv` alarm clips under `<camera>/record/`) skip detection and
+  go straight to cloud storage, where they are archived like any other file. The
+  uploader only runs image validation (`Image.open(...).verify()`) on
+  `image/*` MIME types, so recordings must not be validated as images. Derived
+  files never overwrite an upload: `create_derived_snapshot_path()` prefixes
+  (`detect_<camera name>.jpg`) and `mark_human_snapshot()` copies the original to
+  `human_<camera name>.jpg`, because the camera's own name has no `fetch_`
+  prefix to swap.
 - Object detection: `OBJECT_DETECTION_ENABLED` and the pylib managed feature
   flags `object-detection`, `cloud-object-detection`, `local-object-detection`,
   `cloud-storage-management` (resolved via 1Password `flags/...` entries).
