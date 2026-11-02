@@ -16,8 +16,9 @@ from mimetypes import MimeTypes
 from socket import gaierror as socket_gaierror
 from ssl import SSLEOFError, SSLError
 from time import sleep
-from typing import Any
+from typing import Any, cast
 from urllib.request import pathname2url
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import boto3
 import dateutil.parser
@@ -173,6 +174,53 @@ def create_publisher_struct(device_key, device_label, image_data, image_timestam
     # an absent image means "read the image from storage_path", i.e. snapshots
     # that landed on the file system (camera upload) rather than being fetched
     return {"inputs": [input_device]}
+
+
+# cameras name uploads from their own clock, e.g. "HMDAlarm_20261102-105249.jpg"
+CAMERA_SNAPSHOT_TIMESTAMP = re.compile(r"(\d{8})[-_](\d{6})$")
+
+
+def _make_timestamp(value: Any = None) -> datetime:
+    """make_timestamp() is untyped upstream, so narrow its result here."""
+    return cast("datetime", make_timestamp(timestamp=value))
+
+
+def _snapshot_capture_time(snapshot_path: str) -> datetime:
+    """Best-effort capture time taken from a snapshot file name.
+
+    This application writes "<operation>_<device>_<unix epoch>.jpg" (see
+    create_snapshot_path) while cameras uploading over FTP name their files from
+    their own clock, e.g. "HMDAlarm_20261102-105249.jpg" or
+    "MDAlarm_20261101_063000.jpg" (camera local time, no timezone). The file's
+    modification time is the last resort, so an unparsable value never reaches
+    make_timestamp(), which logs an ERROR with a stack trace and substitutes
+    "now" instead.
+    """
+    file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
+    camera_match = CAMERA_SNAPSHOT_TIMESTAMP.search(file_base_name)
+    if camera_match is not None:
+        try:
+            captured_at = datetime.strptime(f"{camera_match.group(1)}{camera_match.group(2)}", "%Y%m%d%H%M%S")
+        except ValueError:
+            pass
+        else:
+            # a naive timestamp is assumed to be in the camera's timezone, which
+            # is the container's local time unless CAMERA_TIMEZONE/TZ says otherwise
+            zone_name = os.getenv("CAMERA_TIMEZONE") or os.getenv("TZ")
+            if zone_name:
+                try:
+                    captured_at = captured_at.replace(tzinfo=ZoneInfo(zone_name))
+                except ZoneInfoNotFoundError, ValueError:
+                    log.warning("Ignoring invalid camera timezone", extra={"timezone": zone_name})
+            return _make_timestamp(captured_at)
+    if "_" in file_base_name:
+        candidate = " ".join(file_base_name.split("_")[2:]).strip()
+        if candidate:
+            return _make_timestamp(candidate)
+    try:
+        return _make_timestamp(os.path.getmtime(snapshot_path))
+    except OSError:
+        return _make_timestamp()
 
 
 class CameraConfig:
@@ -1107,10 +1155,8 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
             "Device event from snapshot path",
             extra={"device_event": str(device_event), "snapshot_path": snapshot_path},
         )
-        file_base_name = os.path.splitext(os.path.basename(snapshot_path))[0]
-        date_string = " ".join(file_base_name.split("_")[2:]) if "_" in file_base_name else file_base_name
         # keep in sync with invocations of create_snapshot_path
-        device_event.timestamp = date_string
+        device_event.timestamp = _snapshot_capture_time(snapshot_path)
         # a failure for one downstream must not skip the other one, so each step
         # owns its error handling; a step that fails leaves the path uncached so
         # that a later file system event can retry it
@@ -1141,7 +1187,7 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
             )
         log.debug(
             "Uploading snapshot to cloud storage based on file system event",
-            extra={"snapshot_path": snapshot_path, "date_string": date_string},
+            extra={"snapshot_path": snapshot_path, "timestamp": device_event.timestamp_string},
         )
         # upload the image snapshot to Cloud
         if self.cloud_storage_socket is not None:
@@ -1268,6 +1314,10 @@ class ObjectDetector(ZmqRelay):
                 )
                 return
             image_source = "upload"
+            # the notification we republish downstream goes out with the image so
+            # that consumers (e.g. event-processor) do not have to read our disk;
+            # image_source above still marks this as an upload
+            input_device["image"] = image_bytes
         self._path_cache[snapshot_path] = device_label
         context = extract_context(carrier)
         with tracer.start_as_current_span("ObjectDetector.process_message", context=context) as span:

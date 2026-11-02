@@ -76,6 +76,26 @@ section so the app runs with zero external dependencies:
   `FTP_MASQUERADE_ADDRESS` (the address advertised to clients; required when
   the container sits behind Docker's NAT, otherwise clients are handed the
   container's private address and transfers stall after login).
+  **Set `FTP_MASQUERADE_ADDRESS` to the address clients actually connect to**
+  (e.g. the docker host's LAN IP). It is not optional for PASV-only firmware:
+  without it the `227` reply advertises the bridge address (`172.x.y.z`) and the
+  camera fails with `No route to host` — it logs in, `DELE`/`CWD` succeed and no
+  `STOR` ever arrives. Clients that negotiate `EPSV` (or that ignore the PASV
+  address, as curl and ftplib do by default) are unaffected, so a successful
+  upload from a workstation does not prove the cameras can upload. Like every
+  other runtime value it must live in the 1Password `ENV.<PROJECT_NAME>` item,
+  because `make configure` regenerates `.env` from it.
+- FTP logging: `FTP_LOG_LEVEL` (default `WARNING`) controls the pyftpdlib
+  logger; per-command lines (session open, `USER`, `CWD`, `DELE`, `PASV`,
+  `STOR`) are only emitted at `INFO`/`DEBUG`, and are the fastest way to see
+  what a camera is doing. The `[program:ftp]` block in `app_entrypoint.sh` does
+  not route to `/dev/stdout`, so supervisord writes those lines to
+  `/data/ftp-{stdout,stderr}---supervisor-*.log`.
+- Snapshot timestamps: `CAMERA_TIMEZONE` (falls back to `TZ`, then the
+  container's local zone) is the zone used to interpret camera file names such
+  as `HMDAlarm_20261102-105249.jpg`/`MDAlarm_20261101_063000.jpg`, which carry
+  local time without an offset. Files this application writes itself use a
+  `<operation>_<device>_<unix epoch>.jpg` name and are unaffected.
 - Object detection: `OBJECT_DETECTION_ENABLED` and the pylib managed feature
   flags `object-detection`, `cloud-object-detection`, `local-object-detection`,
   `cloud-storage-management` (resolved via 1Password `flags/...` entries).
