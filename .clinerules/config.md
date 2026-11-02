@@ -96,15 +96,21 @@ section so the app runs with zero external dependencies:
   as `HMDAlarm_20261102-105249.jpg`/`MDAlarm_20261101_063000.jpg`, which carry
   local time without an offset. Files this application writes itself use a
   `<operation>_<device>_<unix epoch>.jpg` name and are unaffected.
-- Uploaded artefacts: only `.jpg` uploads are fed to object detection; camera
-  recordings (the `.mkv` alarm clips under `<camera>/record/`) skip detection and
-  go straight to cloud storage, where they are archived like any other file. The
-  uploader only runs image validation (`Image.open(...).verify()`) on
-  `image/*` MIME types, so recordings must not be validated as images. Derived
-  files never overwrite an upload: `create_derived_snapshot_path()` prefixes
+- Uploaded artefacts and archiving: any file a camera drops under
+  `uploads/snapshots/<location>/` (any depth below it, any file name) is
+  associated with that device; a file outside a configured camera path is logged
+  as unmapped and ignored. Still images (`.jpg`, `.jpeg`, `.png`) follow exactly
+  the same rules whether they were pulled from a camera or uploaded by one: they
+  are analysed, and the image itself is **not** archived — only its derived
+  artefacts are (`detect_*` annotated result, `human_*` marker). Anything that
+  cannot be analysed, notably the cameras' `.mkv` alarm clips under
+  `<camera>/record/`, skips detection and goes straight to cloud storage. This
+  lives in `GoogleDriveUploader._should_archive()`. The uploader only runs image
+  validation (`Image.open(...).verify()`) on `image/*` MIME types, waits for an
+  upload to stop growing before using it (`wait_for_settled_snapshot()`), and
+  never overwrites an upload: `create_derived_snapshot_path()` prefixes
   (`detect_<camera name>.jpg`) and `mark_human_snapshot()` copies the original to
-  `human_<camera name>.jpg`, because the camera's own name has no `fetch_`
-  prefix to swap.
+  `human_<camera name>.jpg`.
 - Object detection: `OBJECT_DETECTION_ENABLED` and the pylib managed feature
   flags `object-detection`, `cloud-object-detection`, `local-object-detection`,
   `cloud-storage-management` (resolved via 1Password `flags/...` entries).

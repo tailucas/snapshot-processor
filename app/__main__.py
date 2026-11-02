@@ -156,6 +156,44 @@ HEARTBEAT_INTERVAL_SECONDS = 5
 SNAPSHOT_READ_ATTEMPTS = 10
 SNAPSHOT_READ_DELAY_SECONDS = 0.2
 
+# snapshots this application produces itself carry one of these name prefixes
+# (see create_snapshot_path and create_derived_snapshot_path); they are archived
+# but never re-analysed. Prefixes are matched on the base name only so that a
+# camera is free to use any file name or directory.
+DERIVED_SNAPSHOT_PREFIXES = ("fetch_", "detect_", "human_")
+
+# still images are analysed; everything else (recordings, ...) is archived as-is
+DETECTABLE_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
+
+
+def is_derived_snapshot(snapshot_path: str) -> bool:
+    """True when the file was produced by this application rather than a camera."""
+    return os.path.basename(snapshot_path).startswith(DERIVED_SNAPSHOT_PREFIXES)
+
+
+def is_fetched_snapshot(snapshot_path: str) -> bool:
+    """True for snapshots pulled from a camera (never archived)."""
+    return os.path.basename(snapshot_path).startswith("fetch_")
+
+
+def wait_for_settled_snapshot(snapshot_path: str) -> bool:
+    """Wait for an upload to stop growing, so a partial file is never processed.
+
+    Returns False when the file never settles within the budget (the caller can
+    retry later) or cannot be read at all.
+    """
+    previous_size = None
+    for _ in range(SNAPSHOT_READ_ATTEMPTS):
+        try:
+            size = os.path.getsize(snapshot_path)
+        except OSError:
+            size = None
+        if size is not None and size > 0 and size == previous_size:
+            return True
+        previous_size = size
+        sleep(SNAPSHOT_READ_DELAY_SECONDS)
+    return False
+
 
 def create_snapshot_path(parent_path, operation, unix_timestamp, file_extension):
     return os.path.join(parent_path, f"{operation}_" + str(unix_timestamp) + "." + file_extension)
@@ -186,7 +224,7 @@ def mark_human_snapshot(snapshot_path: str) -> str:
     human_path = create_derived_snapshot_path(snapshot_path, "human")
     if human_path == snapshot_path:
         return snapshot_path
-    if os.path.basename(snapshot_path).startswith("fetch_"):
+    if is_fetched_snapshot(snapshot_path):
         os.rename(snapshot_path, human_path)
     else:
         shutil.copy2(snapshot_path, human_path)
@@ -246,10 +284,13 @@ def _snapshot_capture_time(snapshot_path: str) -> datetime:
                 except ZoneInfoNotFoundError, ValueError:
                     log.warning("Ignoring invalid camera timezone", extra={"timezone": zone_name})
             return _make_timestamp(captured_at)
+    # "<operation>_<device>_<unix epoch>" is the only other shape this application
+    # writes; anything else falls back to the file's modification time, so an
+    # arbitrary camera name can never yield a bogus timestamp or an ERROR log
     if "_" in file_base_name:
         candidate = " ".join(file_base_name.split("_")[2:]).strip()
-        if candidate:
-            return _make_timestamp(candidate)
+        if candidate.isdigit() and len(candidate) >= 9:
+            return _make_timestamp(int(candidate))
     try:
         return _make_timestamp(os.path.getmtime(snapshot_path))
     except OSError:
@@ -863,18 +904,46 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         ) as zmq_socket:
             while not threads.shutting_down:
                 (snapshot_path, snapshot_timestamp) = zmq_socket.recv_pyobj()
-                if "fetch" in snapshot_path:
-                    log.debug("Not uploading snapshot", extra={"snapshot_path": snapshot_path})
+                if not self._should_archive(file_path=snapshot_path):
+                    log.debug(
+                        "Not archiving snapshot; only detections and recordings are archived",
+                        extra={"snapshot_path": snapshot_path},
+                    )
                     continue
                 while not self.upload(file_path=snapshot_path, created_time=snapshot_timestamp):
                     # never spin
                     threads.interruptable_sleep.wait(1)
 
+    def _should_archive(self, file_path) -> bool:
+        """True when a file belongs in cloud storage.
+
+        Still images are the detection pipeline's input: they are analysed and
+        only the derived artefacts (detect_*/human_*) are archived, whether the
+        image was pulled from a camera or uploaded by one. Anything that cannot
+        be analysed - notably the cameras' .mkv alarm clips - is archived as-is.
+        """
+        # snapshots pulled from a camera are analysis-only, exactly like the
+        # camera's own still images
+        if is_fetched_snapshot(file_path):
+            return False
+        # derived artefacts are the archive's record of a detection
+        if is_derived_snapshot(file_path):
+            return True
+        mime_type = self._filetype.mime_type(file_path)
+        return mime_type is None or not mime_type.startswith("image/")
+
     def upload(self, file_path, created_time=None):
         # upload the snapshot
+        if not os.path.exists(file_path):
+            log.debug("Snapshot is gone before upload", extra={"file_path": file_path})
+            return True
+        # an upload arrives in chunks: wait for it to stop growing, otherwise a
+        # partial recording would be rejected by the size check and re-sent
+        if not wait_for_settled_snapshot(file_path):
+            log.debug("Snapshot still being written; will retry", extra={"file_path": file_path})
+            return False
         mime_type = self._filetype.mime_type(file_path)
-        # only images can be validated as images: camera recordings such as the
-        # .mkv alarm clips are archived as they are
+        # only images can be validated as images: recordings are archived as they are
         if mime_type is None or mime_type.startswith("image/"):
             try:
                 with Image.open(file_path) as img:
@@ -1196,28 +1265,35 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         # owns its error handling; a step that fails leaves the path uncached so
         # that a later file system event can retry it
         processed = True
-        # do not notify again for fetched image data
-        if "fetch" not in snapshot_path and "detect" not in snapshot_path and "human" not in snapshot_path:
-            # start processing the image data
-            if snapshot_path.lower().endswith(".jpg") and "object" not in snapshot_path:
-                if self._pipeline_enabled:
-                    try:
-                        self._notify_object_detection(device_event=device_event, snapshot_path=snapshot_path)
-                    except Exception as e:
-                        log.exception(
-                            "Failed to send snapshot for object detection",
-                            extra={"snapshot_path": snapshot_path},
-                        )
-                        record_exception(e)
-                        processed = False
-                else:
-                    log.debug(
-                        "Not sending snapshot for object detection",
-                        extra={"snapshot_path": snapshot_path},
-                    )
-        else:
+        # snapshots this application produced itself are never analysed again
+        if is_derived_snapshot(snapshot_path):
             log.debug(
                 "Not generating redundant snapshot event",
+                extra={"snapshot_path": snapshot_path},
+            )
+        # camera uploads are analysed whatever they are called, as long as they
+        # are still images
+        elif not snapshot_path.lower().endswith(DETECTABLE_IMAGE_SUFFIXES):
+            log.debug(
+                "Not sending snapshot for object detection; not a still image",
+                extra={
+                    "snapshot_path": snapshot_path,
+                    "supported_suffixes": DETECTABLE_IMAGE_SUFFIXES,
+                },
+            )
+        elif self._pipeline_enabled:
+            try:
+                self._notify_object_detection(device_event=device_event, snapshot_path=snapshot_path)
+            except Exception as e:
+                log.exception(
+                    "Failed to send snapshot for object detection",
+                    extra={"snapshot_path": snapshot_path},
+                )
+                record_exception(e)
+                processed = False
+        else:
+            log.debug(
+                "Not sending snapshot for object detection",
                 extra={"snapshot_path": snapshot_path},
             )
         log.debug(
@@ -1367,9 +1443,11 @@ class ObjectDetector(ZmqRelay):
                     extra={"image_source": image_source, "snapshot_path": snapshot_path},
                 )
                 if is_flag_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION) and self._local_model is not None:
-                    im = Image.open(BytesIO(image_bytes))
                     results = None
                     try:
+                        # opening is inside the guard: a truncated upload must not
+                        # escape into the ZMQ relay loop
+                        im = Image.open(BytesIO(image_bytes))
                         start_time = time.time() * 1000
                         results = self._local_model.predict(source=im, conf=self._minimum_confidence)
                         end_time = time.time() * 1000
