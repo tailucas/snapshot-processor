@@ -489,7 +489,14 @@ class Snapshot(ZmqRelay):
         timestamp = make_timestamp(timestamp=control_payload["snapshot"]["timestamp"])
         output_trigger = control_payload["snapshot"]["output_triggered"]
         device_key = output_trigger["device_key"]
-        device_label = output_trigger["device_label"]
+        # the trigger's own label falls back to the publisher's device key
+        # ("Back Door Camera") when that publisher has no label configured, which
+        # would tag fetched snapshots with a different device name to the ones a
+        # camera uploads over FTP (see observability.md: metrics carry the
+        # normalised label); the location we hold locally is the label both
+        # ingestion paths agree on, so prefer it and keep the payload's label as
+        # the fallback
+        device_label = (self.cameras.get(device_key) or {}).get("location") or output_trigger["device_label"]
         device_params = output_trigger["device_params"]
         context = extract_context(carrier)
         with tracer.start_as_current_span("Snapshot.process_message", context=context) as span:

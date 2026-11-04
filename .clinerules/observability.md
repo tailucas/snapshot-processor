@@ -89,6 +89,15 @@ can be joined. Tag with this value under the `device` key; do not pass the
 human-readable label or the derived `device_key` (`"Back Door camera"`) as an
 attribute — that doubles cardinality for no query value.
 
+**Rule — the device label comes from local configuration, not the trigger.**
+Both ingestion paths (a camera trigger, and an FTP upload) must resolve to the
+same label, so `Snapshot.process_message()` prefers the `location` the camera
+profile already holds (`[output_location]` in `config/app.conf`) and only falls
+back to the trigger's `device_label`. A publisher's label is not trustworthy:
+event-processor's `OutputConfig.getDeviceLabel()` returns its `device_key` when
+no label is configured, so a triggered fetch was tagged `back_door_camera`
+while the same camera's uploads were tagged `back_door`.
+
 The pylib `monitoring` extra wires the OTEL metric readers
 (`PeriodicExportingMetricReader`, 60s default interval), so a gauge's value is
 the **last** sample recorded in each export window. If OTEL instruments are
