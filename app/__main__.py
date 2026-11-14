@@ -174,8 +174,19 @@ SENTRY_MAX_VALUE_LENGTH = 1024
 # and treating that as our own output would skip analysis and, because the
 # detector is what publishes the device event, silently drop that device's event.
 # Provenance - what this process actually wrote - is what classifies a snapshot;
-# see DerivedSnapshotRegistry.
+# see DerivedSnapshotRegistry. The one exception is detection output, which
+# declares a reserved namespace of its own (DETECTION_ARTEFACT_PREFIX).
 DERIVED_SNAPSHOT_PREFIXES = ("fetch_", "detect_", "human_")
+
+# A detection result is named "<operation>_<object class>_<source name>", e.g.
+# detect_human_HMDAlarm_20261102-105249.jpg. Any file carrying this prefix is a
+# detection result - whoever produced it - and is never fed back through the
+# model, because running detection over detection output is pure waste: it can
+# only find what was already found.
+DETECTION_ARTEFACT_PREFIX = "detect_"
+
+# what a detected label is recorded as in an artefact name
+DETECTED_OBJECT_CLASSES = {"person": "human", "face": "human"}
 
 # still images are analysed; everything else (recordings, ...) is archived as-is
 DETECTABLE_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
@@ -237,6 +248,25 @@ def has_derived_snapshot_name(snapshot_path: str) -> bool:
     one extra image.
     """
     return os.path.basename(snapshot_path).startswith(DERIVED_SNAPSHOT_PREFIXES)
+
+
+def is_detection_artefact(snapshot_path: str) -> bool:
+    """True when the file declares itself a detection result (``detect_<class>_``).
+
+    Unlike "did we write this", this is deliberately a name test: the reserved
+    namespace is the contract, so a detection result is recognised however it
+    arrived, and is never analysed again. It is still processed - mapped to its
+    device, published as an event when it did not come from us, and archived.
+    """
+    return os.path.basename(snapshot_path).startswith(DETECTION_ARTEFACT_PREFIX)
+
+
+def detection_object_class(label_name: str) -> str | None:
+    """The object class token a detected label contributes to an artefact name."""
+    for label, object_class in DETECTED_OBJECT_CLASSES.items():
+        if label in label_name:
+            return object_class
+    return None
 
 
 class SnapshotDecodeError(OSError):
@@ -1580,6 +1610,24 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                 "Not generating redundant snapshot event",
                 extra={"snapshot_path": snapshot_path},
             )
+        # a detection result is never analysed again whoever produced it, but a
+        # file that did not come from us is still an event for its device: it is
+        # handed on so the detector relays it without running the model
+        elif is_detection_artefact(snapshot_path):
+            log.debug(
+                "Publishing a detection artefact as a device event without analysing it",
+                extra={"snapshot_path": snapshot_path},
+            )
+            if self._pipeline_enabled:
+                try:
+                    self._notify_object_detection(device_event=device_event, snapshot_path=snapshot_path)
+                except Exception as e:
+                    log.exception(
+                        "Failed to send detection artefact for device notification",
+                        extra={"snapshot_path": snapshot_path},
+                    )
+                    record_exception(e)
+                    processed = False
         # camera uploads are analysed whatever they are called, as long as they
         # are still images
         elif not snapshot_path.lower().endswith(DETECTABLE_IMAGE_SUFFIXES):
@@ -1881,11 +1929,23 @@ class ObjectDetector(ZmqRelay):
             # find objects using the specified model
             event_detail = None
             if is_flag_enabled(FEATURE_FLAG_OBJECT_DETECTION) and self._od_enabled:
-                log.debug(
-                    "Detecting objects in cached image",
-                    extra={"image_source": image_source, "snapshot_path": snapshot_path},
-                )
-                if is_flag_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION) and self._local_model is not None:
+                if is_detection_artefact(snapshot_path):
+                    # running the model over detection output can only find what
+                    # was already found; the event for this file still goes out
+                    log.debug(
+                        "Not analysing a detection artefact",
+                        extra=snapshot_log_context(
+                            snapshot_path=snapshot_path,
+                            device_label=device_label,
+                            image_source=image_source,
+                            image_size_bytes=len(image_bytes),
+                        ),
+                    )
+                elif is_flag_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION) and self._local_model is not None:
+                    log.debug(
+                        "Detecting objects in cached image",
+                        extra={"image_source": image_source, "snapshot_path": snapshot_path},
+                    )
                     results = None
                     try:
                         # decoding is inside the guard: a truncated upload must not
@@ -1939,6 +1999,7 @@ class ObjectDetector(ZmqRelay):
                             if not isinstance(result, Results):
                                 continue
                             person_detected = False
+                            object_class = None
                             for detect_dict in result.summary():
                                 log.debug("Local inference", extra={"inference": detect_dict})
                                 label_name = detect_dict["name"]
@@ -1948,26 +2009,31 @@ class ObjectDetector(ZmqRelay):
                                     label_confidence * 100,
                                     attributes={"label_name": label_name},
                                 )
-                                if "person" in label_name:
+                                label_object_class = detection_object_class(label_name)
+                                if label_object_class is not None:
                                     person_detected = True
-                                    person_count += 1
-                                if "face" in label_name:
-                                    person_detected = True
-                                    face_count += 1
-                            if person_detected:
+                                    if object_class is None:
+                                        # the artefact name carries the class that
+                                        # triggered it: detect_<class>_<name>
+                                        object_class = label_object_class
+                                    if "person" in label_name:
+                                        person_count += 1
+                                    else:
+                                        face_count += 1
+                            if person_detected and object_class is not None:
                                 # only archive this device's clips when a person
                                 # or face was seen around the same time
                                 detection_registry.record(
                                     device_key=input_device["device_key"],
                                     epoch_timestamp=float(input_device["image_timestamp"]),
                                 )
-                                detect_filename = create_derived_snapshot_path(snapshot_path, "detect")
+                                detect_filename = create_derived_snapshot_path(snapshot_path, f"detect_{object_class}")
                                 log.debug(
                                     "Saving person detection result",
                                     extra={"detect_filename": detect_filename},
                                 )
                                 try:
-                                    derived_snapshots.register(detect_filename, "detect")
+                                    derived_snapshots.register(detect_filename, f"detect_{object_class}")
                                     result.save(filename=detect_filename)
                                 except Exception as e:
                                     log.exception(
@@ -2032,6 +2098,7 @@ class ObjectDetector(ZmqRelay):
                         )
                         # find Person labels
                         person_count = 0
+                        object_class = None
                         labels = []
                         if "Labels" in response:
                             for detect_dict in response["Labels"]:
@@ -2045,14 +2112,8 @@ class ObjectDetector(ZmqRelay):
                                         person_count += num_instances
                                     else:
                                         person_count += 1
-                                    human_detect_filename = mark_human_snapshot(snapshot_path)
-                                    log.debug(
-                                        "Marked snapshot after person detection",
-                                        extra={
-                                            "snapshot_path": snapshot_path,
-                                            "human_detect_filename": human_detect_filename,
-                                        },
-                                    )
+                                    # the same artefact name the local model uses
+                                    object_class = detection_object_class(label_name.lower())
                             log.debug(
                                 "Rekognition labels found",
                                 extra={
@@ -2062,10 +2123,33 @@ class ObjectDetector(ZmqRelay):
                                     "labels": labels,
                                 },
                             )
-                        if person_count > 0:
+                        if person_count > 0 and object_class is not None:
                             detection_registry.record(
                                 device_key=input_device["device_key"],
                                 epoch_timestamp=float(input_device["image_timestamp"]),
+                            )
+                            # the cloud service returns boxes, not a rendered image,
+                            # so the source is recorded as the detection artefact:
+                            # every detection then produces the same
+                            # detect_<class>_<name> file whatever the engine
+                            detect_filename = create_derived_snapshot_path(snapshot_path, f"detect_{object_class}")
+                            try:
+                                derived_snapshots.register(detect_filename, f"detect_{object_class}")
+                                with open(detect_filename, "wb") as detect_file:
+                                    detect_file.write(image_bytes)
+                            except OSError as e:
+                                log.exception(
+                                    "Unable to save detection result",
+                                    extra={"detect_filename": detect_filename},
+                                )
+                                record_exception(e)
+                            human_detect_filename = mark_human_snapshot(snapshot_path)
+                            log.debug(
+                                "Marked snapshot after person detection",
+                                extra={
+                                    "snapshot_path": snapshot_path,
+                                    "human_detect_filename": human_detect_filename,
+                                },
                             )
                             additional_info = f"{person_count} person(s) and {len(labels)} things"
                             event_detail = f"{device_label} ({image_source}): {additional_info}."

@@ -109,7 +109,8 @@ section so the app runs with zero external dependencies:
   as unmapped and ignored. Still images (`.jpg`, `.jpeg`, `.png`) follow exactly
   the same rules whether they were pulled from a camera or uploaded by one: they
   are analysed, and the image itself is **not** archived — only its derived
-  artefacts are (`detect_*` annotated result, `human_*` marker). Anything that
+  artefacts are (the `detect_<class>_*` annotated result, e.g. `detect_human_*`,
+  and the `human_*` marker). Anything that
   cannot be analysed, notably the cameras' `.mkv` alarm clips under
   `<camera>/record/`, skips detection and goes straight to cloud storage. This
   lives in `GoogleDriveUploader._should_archive()`. The uploader only runs image
@@ -117,7 +118,7 @@ section so the app runs with zero external dependencies:
   pixel data and so cannot see a truncated file) on `image/*` MIME types, waits
   for an upload to stop growing before using it
   (`wait_for_settled_snapshot()`), and never overwrites an upload:
-  `create_derived_snapshot_path()` prefixes (`detect_<camera name>.jpg`) and
+  `create_derived_snapshot_path()` prefixes (`detect_human_<camera name>.jpg`) and
   `mark_human_snapshot()` copies the original to `human_<camera name>.jpg`.
 - Upload completion: the FTP server — the process that actually performs the
   transfer — announces a completed upload to the pipeline over a ZeroMQ `ipc://`
@@ -156,13 +157,27 @@ section so the app runs with zero external dependencies:
   `Local detection error.` carry them.
 - Snapshot provenance: `is_derived_snapshot()` answers "did *we* write this?",
   using `DerivedSnapshotRegistry`, which records each path immediately before the
-  application writes it (`fetch_*` in `Snapshot`, `detect_*` in `ObjectDetector`,
-  `human_*` in `mark_human_snapshot`). It is deliberately **not** a name test: a
-  camera is free to upload `detect_something.jpg`, and treating that as our own
-  output skipped analysis *and* silently dropped the device event, because
-  `ObjectDetector` is the stage that publishes `event.notify.*.image` for
-  event-processor. `has_derived_snapshot_name()` exists only as an archiving
-  fail-safe, so a missing provenance entry cannot drop a detection record.
+  application writes it (`fetch_*` in `Snapshot`, `detect_<class>_*` in
+  `ObjectDetector`, `human_*` in `mark_human_snapshot`). It is deliberately
+  **not** a name test: a camera is free to upload `detect_something.jpg`, and
+  treating that as our own output skipped analysis *and* silently dropped the
+  device event, because `ObjectDetector` is the stage that publishes
+  `event.notify.*.image` for event-processor. `has_derived_snapshot_name()`
+  exists only as an archiving fail-safe, so a missing provenance entry cannot
+  drop a detection record.
+- Detection namespace: detection output is named
+  `<operation>_<object class>_<source name>` — `detect_human_<name>` for the
+  classes currently recorded (`DETECTED_OBJECT_CLASSES` maps `person`/`face` to
+  `human`) — and `detect_` is a **reserved prefix**. The local model renders the
+  annotated image; the Rekognition path has no render to save, so it writes the
+  source bytes under the same name, which keeps the artefact set identical
+  whichever engine runs. Any file carrying the prefix, from
+  anywhere, is a detection result: it is never passed through the model again
+  (`is_detection_artefact()`), because analysing detection output can only find
+  what was already found. It is still *processed*: mapped to its device, queued
+  for cloud storage/archiving, and — when it did not come from us — handed to the
+  detector so the device event is still published for event-processor (the
+  detector relays without inferring). Our own artefacts produce no second event.
 - Recording gate: a recording (any `video/*` upload, i.e. the `.mkv` clips) is
   archived **only** when the same device detected a person/face within
   `RECORDING_DETECTION_WINDOW_SECONDS` (default `60`) of the recording's
