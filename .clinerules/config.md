@@ -154,6 +154,15 @@ section so the app runs with zero external dependencies:
   `snapshot_path`, `snapshot_file_name`, `device_label`, `image_source` (`fetch`
   or `upload`) and `image_size_bytes` — both the truncation ERROR and the generic
   `Local detection error.` carry them.
+- Snapshot provenance: `is_derived_snapshot()` answers "did *we* write this?",
+  using `DerivedSnapshotRegistry`, which records each path immediately before the
+  application writes it (`fetch_*` in `Snapshot`, `detect_*` in `ObjectDetector`,
+  `human_*` in `mark_human_snapshot`). It is deliberately **not** a name test: a
+  camera is free to upload `detect_something.jpg`, and treating that as our own
+  output skipped analysis *and* silently dropped the device event, because
+  `ObjectDetector` is the stage that publishes `event.notify.*.image` for
+  event-processor. `has_derived_snapshot_name()` exists only as an archiving
+  fail-safe, so a missing provenance entry cannot drop a detection record.
 - Recording gate: a recording (any `video/*` upload, i.e. the `.mkv` clips) is
   archived **only** when the same device detected a person/face within
   `RECORDING_DETECTION_WINDOW_SECONDS` (default `60`) of the recording's

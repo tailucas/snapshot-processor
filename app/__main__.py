@@ -168,14 +168,46 @@ SNAPSHOT_READ_DELAY_SECONDS = 0.2
 SENTRY_EVENT_SIZE_LIMIT_BYTES = 1024 * 1024
 SENTRY_MAX_VALUE_LENGTH = 1024
 
-# snapshots this application produces itself carry one of these name prefixes
-# (see create_snapshot_path and create_derived_snapshot_path); they are archived
-# but never re-analysed. Prefixes are matched on the base name only so that a
-# camera is free to use any file name or directory.
+# Snapshots this application produces itself carry one of these name prefixes
+# (see create_snapshot_path and create_derived_snapshot_path). A name is only a
+# *convention*: a camera is free to upload a file called "detect_something.jpg",
+# and treating that as our own output would skip analysis and, because the
+# detector is what publishes the device event, silently drop that device's event.
+# Provenance - what this process actually wrote - is what classifies a snapshot;
+# see DerivedSnapshotRegistry.
 DERIVED_SNAPSHOT_PREFIXES = ("fetch_", "detect_", "human_")
 
 # still images are analysed; everything else (recordings, ...) is archived as-is
 DETECTABLE_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
+
+
+class DerivedSnapshotRegistry:
+    """Paths this process wrote itself, so they are never mistaken for uploads.
+
+    An entry is recorded before the file is created, so the file system event for
+    the write always finds it. The value is the operation that produced the file
+    ("fetch", "detect", "human"), which is what ``mark_human_snapshot`` needs to
+    decide whether to rename (our own fetched snapshot) or copy (a camera upload
+    keeps its original).
+    """
+
+    def __init__(self, maxsize: int = 1024):
+        self._kinds: LRUCache = LRUCache(maxsize=maxsize)
+        self._lock = threading.Lock()
+
+    def register(self, snapshot_path: str, operation: str) -> str:
+        """Record that this process is about to write ``snapshot_path``."""
+        with self._lock:
+            self._kinds[snapshot_path] = operation
+        return snapshot_path
+
+    def kind(self, snapshot_path: str) -> str | None:
+        """The operation that wrote the file, or None when it is not ours."""
+        with self._lock:
+            return self._kinds.get(snapshot_path)
+
+
+derived_snapshots = DerivedSnapshotRegistry()
 
 
 def optional_file_size(file_path: str) -> int | None:
@@ -187,13 +219,24 @@ def optional_file_size(file_path: str) -> int | None:
 
 
 def is_derived_snapshot(snapshot_path: str) -> bool:
-    """True when the file was produced by this application rather than a camera."""
-    return os.path.basename(snapshot_path).startswith(DERIVED_SNAPSHOT_PREFIXES)
+    """True when this application wrote the file, judged by provenance."""
+    return derived_snapshots.kind(snapshot_path) is not None
 
 
 def is_fetched_snapshot(snapshot_path: str) -> bool:
-    """True for snapshots pulled from a camera (never archived)."""
-    return os.path.basename(snapshot_path).startswith("fetch_")
+    """True for a snapshot this application pulled from a camera."""
+    return derived_snapshots.kind(snapshot_path) == "fetch"
+
+
+def has_derived_snapshot_name(snapshot_path: str) -> bool:
+    """True when a file *claims* by name to be this application's output.
+
+    Only a fail-safe: a name cannot prove who wrote a file, so this is never used
+    to decide whether to analyse one. It keeps archiving working if a provenance
+    entry is ever missing, since losing a detection record is worse than archiving
+    one extra image.
+    """
+    return os.path.basename(snapshot_path).startswith(DERIVED_SNAPSHOT_PREFIXES)
 
 
 class SnapshotDecodeError(OSError):
@@ -343,10 +386,12 @@ def create_derived_snapshot_path(snapshot_path: str, operation: str) -> str:
     "<operation>_<device>_<epoch>.jpg" (see create_snapshot_path), so the leading
     "fetch_" is swapped for the new operation. Uploads keep the camera's own file
     name, so the operation is prefixed instead: replacing "fetch" in those paths
-    is a no-op that would write over the uploaded snapshot.
+    is a no-op that would write over the uploaded snapshot. Provenance decides
+    which applies, so a camera upload that is merely *called* "fetch_..." keeps
+    its whole name.
     """
     directory, file_name = os.path.split(snapshot_path)
-    if file_name.startswith("fetch_"):
+    if is_fetched_snapshot(snapshot_path):
         file_name = file_name[len("fetch_") :]
     return os.path.join(directory, f"{operation}_{file_name}")
 
@@ -354,13 +399,19 @@ def create_derived_snapshot_path(snapshot_path: str, operation: str) -> str:
 def mark_human_snapshot(snapshot_path: str) -> str:
     """Persist the "human_" marker for a snapshot that had a person detected.
 
-    Fetched snapshots are never archived, so the original is renamed (long
-    standing behaviour). An uploaded snapshot is archived as it is, so it is
-    copied instead: renaming it would leave the cloud uploader nothing to read.
+    Snapshots this application fetched are never archived, so the original is
+    renamed (long standing behaviour). An uploaded snapshot is archived as it is,
+    so it is copied instead: renaming it would leave the cloud uploader nothing
+    to read. Which of the two applies is decided by provenance, not by the file
+    name, so a camera upload that happens to be called "fetch_..." is still
+    copied rather than renamed away.
     """
     human_path = create_derived_snapshot_path(snapshot_path, "human")
     if human_path == snapshot_path:
         return snapshot_path
+    # record before writing, so the event for the new file can never be mistaken
+    # for a camera upload
+    derived_snapshots.register(human_path, "human")
     if is_fetched_snapshot(snapshot_path):
         os.rename(snapshot_path, human_path)
     else:
@@ -693,6 +744,10 @@ class Snapshot(ZmqRelay):
                         "image_mode": im.mode,
                     },
                 )
+                # record before the image is published: the detector derives the
+                # artefact names from this path, and the close event for the file
+                # must never be mistaken for a camera upload and analysed again
+                derived_snapshots.register(output_filename, "fetch")
                 # send image data for processing
                 start_time = time.time() * 1000
                 sink_socket.send_pyobj(
@@ -1093,8 +1148,10 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         # camera's own still images
         if is_fetched_snapshot(file_path):
             return False
-        # derived artefacts are the archive's record of a detection
-        if is_derived_snapshot(file_path):
+        # our own artefacts are the archive's record of a detection; a file that
+        # only claims the name is kept too, so a missing provenance entry can
+        # never drop a detection record from the archive
+        if is_derived_snapshot(file_path) or has_derived_snapshot_name(file_path):
             return True
         if mime_type is None:
             mime_type = self._filetype.mime_type(file_path)
@@ -1910,6 +1967,7 @@ class ObjectDetector(ZmqRelay):
                                     extra={"detect_filename": detect_filename},
                                 )
                                 try:
+                                    derived_snapshots.register(detect_filename, "detect")
                                     result.save(filename=detect_filename)
                                 except Exception as e:
                                     log.exception(
