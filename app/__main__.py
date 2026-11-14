@@ -119,6 +119,13 @@ detect_confidence_gauge = meter.create_gauge(
     description="Confidence of a detected object label",
     unit="%",
 )
+# recorded once per completed inference, zero included: a zero sample proves the
+# model ran and matched nothing, while a missing sample proves it never ran
+detect_classes_gauge = meter.create_gauge(
+    name="detect_classes",
+    description="Object classes recorded per object detection attempt",
+    unit="1",
+)
 image_source_counter = meter.create_counter(
     name="image_source",
     description="Images entering the pipeline, by source and device",
@@ -132,6 +139,21 @@ def record_image_source(image_source: str, device_label: str) -> None:
         1,
         attributes={"source": image_source, "device": normalize_device_name(device_label)},
     )
+
+
+def detection_metric_attributes(device_label: str, image_source: str, engine: str) -> dict[str, str]:
+    """Attributes shared by the per-attempt object detection metrics.
+
+    ``device`` carries the normalised label so every metric uses one device
+    vocabulary (see observability.md). ``image_source`` (fetch/upload) and
+    ``engine`` (local/rekognition) are bounded, so they stay cheap to carry and
+    answer "was this fetched snapshot analysed, and by what".
+    """
+    return {
+        "device": normalize_device_name(device_label),
+        "image_source": image_source,
+        "engine": engine,
+    }
 
 
 def inject_context(context: Context | None = None) -> dict[str, str]:
@@ -1968,6 +1990,8 @@ class ObjectDetector(ZmqRelay):
                         extra={"image_source": image_source, "snapshot_path": snapshot_path},
                     )
                     results = None
+                    # classes this attempt actually recorded, across every result
+                    recorded_classes: set[str] = set()
                     try:
                         # decoding is inside the guard: a truncated upload must not
                         # escape into the ZMQ relay loop
@@ -2038,6 +2062,7 @@ class ObjectDetector(ZmqRelay):
                                 result_classes[object_class] = result_classes.get(object_class, 0) + 1
                             if not result_classes:
                                 continue
+                            recorded_classes.update(result_classes)
                             # the first class in the result names the artefacts:
                             # detect_<class>_<name> and <class>_<name>
                             object_class = next(iter(result_classes))
@@ -2099,6 +2124,20 @@ class ObjectDetector(ZmqRelay):
                                     },
                                 )
                             input_device["event_detail"] = additional_info
+                    if results is not None:
+                        # a completed inference always reports its class count,
+                        # zero included, so a flat zero separates "ran and found
+                        # nothing" from "never ran": no sample at all is recorded
+                        # when the detection gate, the engine or the decode step
+                        # kept the model away from this image
+                        detect_classes_gauge.set(
+                            len(recorded_classes),
+                            attributes=detection_metric_attributes(
+                                device_label=device_label,
+                                image_source=image_source,
+                                engine="local",
+                            ),
+                        )
                 elif self._rekog is not None:
                     log.debug(
                         "Detecting objects in cached image",
@@ -2143,6 +2182,16 @@ class ObjectDetector(ZmqRelay):
                                     "labels": labels,
                                 },
                             )
+                        # same contract as the local engine: a completed
+                        # response is always counted, zero included
+                        detect_classes_gauge.set(
+                            len(class_counts),
+                            attributes=detection_metric_attributes(
+                                device_label=device_label,
+                                image_source=image_source,
+                                engine="rekognition",
+                            ),
+                        )
                         if class_counts:
                             # the first class found names the artefacts
                             object_class = next(iter(class_counts))

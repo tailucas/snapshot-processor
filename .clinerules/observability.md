@@ -65,13 +65,27 @@ The application creates **synchronous OTEL instruments** from the module-level
 metrics are:
 
 - **OTEL gauges** (`meter.create_gauge`, recorded with `.set()`): `capture_time`,
-  `snapshot_handoff_time`, `detect_time` (all `ms`) and `detect_confidence`
-  (`%`). Emitted from `Snapshot` and `ObjectDetector` in `app/__main__.py`.
+  `snapshot_handoff_time`, `detect_time` (all `ms`), `detect_confidence` (`%`)
+  and `detect_classes` (count). Emitted from `Snapshot` and `ObjectDetector` in
+  `app/__main__.py`.
 - **OTEL counter** (`meter.create_counter`): `image_source`, incremented once
   per image entering the pipeline, tagged `source=fetch|upload` and
   `device=<normalised device label>`.
 - **CloudWatch counters** (`tailucas_pylib.aws.metrics.post_count_metric`):
   `Errors` and similar counters posted to the `automation` namespace.
+
+**Rule — an attempt must be countable.** `detect_classes` is recorded once per
+*completed* inference, by either engine, tagged
+`device`/`image_source=fetch|upload`/`engine=local|rekognition`; its value is the
+number of distinct object classes recorded, **including zero**. Zero is a real
+sample — "the model ran and matched nothing" — and must be posted, because the
+*absence* of a sample states something different: no attempt was made (the gate
+was closed by a feature flag, no engine was available, the file was a detection
+artefact relayed without inference, or the image failed to decode). That
+distinction is otherwise only visible in DEBUG logs, which production does not
+emit. `detect_time` proves *that* a model ran but carries no detail about what it
+found, and `image_source` is incremented by `Snapshot` before the hand-off, so
+neither can answer "was this snapshot analysed, and to what end".
 
 **Rule — prefer gauges over histograms.** A histogram multiplies every
 attribute set by the explicit bucket boundaries (the SDK default has 14, i.e.
