@@ -161,6 +161,7 @@ For local development (optional):
    | `CRONITOR_MONITOR_KEY` | Cronitor health check API key | *specific to your account* |
    | `DEVICE_NAME` | Container hostname | `snapshot-processor` |
    | `FTP_CREATE_DIRS` | Directories to create in FTP root | `snapshots/cam1,snapshots/cam2` |
+   | `FTP_NOTIFY_URL` | ZeroMQ endpoint for upload-completion notifications (empty disables) | `ipc:///tmp/snapshot-processor-ftp.sock` |
    | `FTP_PASS` | FTP server password (basic auth) | *project specific* |
    | `FTP_UPLOAD_DIR` | FTP upload root directory | `uploads/snapshots` |
    | `FTP_USER` | FTP server username (basic auth) | *project specific* |
@@ -244,7 +245,8 @@ For local development (optional):
 
    The application will:
    - Initialize RabbitMQ client for device messaging
-   - Start watchdog file system observer for FTP upload detection
+   - Start watchdog file system observer (fallback upload trigger, archiving and
+     device mapping) and the FTP completion listener
    - Authenticate to Google Drive (OAuth flow if token missing)
    - Initialize Snapshot fetcher with camera configuration
    - Start ObjectDetector (AWS Rekognition or YOLOv8)
@@ -317,18 +319,30 @@ The `SnapshotFTPHandler` (app/ftp_server.py) provides FTP-based upload:
 - IP cameras can push snapshots directly via FTP
 - Basic authentication with configurable username/password
 - Creates configured upload directories automatically
-- Logs all FTP events (login, upload, download)
+- Logs all FTP events (login, upload, download) and removes partial files left by
+  an aborted transfer
+- Announces each completed transfer to the pipeline over a ZeroMQ `ipc://`
+  channel (`FTP_NOTIFY_URL`), so the pipeline knows the upload is finished
+  instead of inferring it from the file system
 - Optional feature (controlled by `RUN_FTP_SERVER` flag)
 - Listens on port 21 (exposed in docker-compose.yml)
 
 ### File System Monitoring
 
-The `UploadEventHandler` (line 765) watches for local FTP uploads:
-- Uses watchdog library to monitor `/data/ftp` directory
-- Detects file creation, movement, and completion
-- De-duplicates rapid file system events
-- Validates file integrity before processing
-- Triggers snapshot processing pipeline
+The `UploadEventHandler` in `app/__main__.py` watches the snapshot tree:
+
+- Uses the watchdog library to monitor the snapshot root recursively (every
+  configured camera directory, including `<camera>/record/`)
+- Acts on the events that mean the writer is finished: `IN_CLOSE_WRITE`
+  (file closed) and a rename into place - never on writes, so a half-uploaded
+  file is not read as a damaged snapshot
+- Maps a path to the configured camera, de-duplicates repeated reports (the FTP
+  notification and the close event normally both arrive) and derives the capture
+  time from the camera's own file name
+- Triggers the analysis pipeline for still images (the FTP server's ZeroMQ
+  completion notification is the primary trigger; this is the fallback) and
+  queues everything else - detection artefacts, `human_` markers and `.mkv`
+  recordings - for cloud archiving
 
 ## Build System
 

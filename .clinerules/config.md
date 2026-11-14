@@ -91,6 +91,13 @@ section so the app runs with zero external dependencies:
   what a camera is doing. The `[program:ftp]` block in `app_entrypoint.sh` does
   not route to `/dev/stdout`, so supervisord writes those lines to
   `/data/ftp-{stdout,stderr}---supervisor-*.log`.
+- Upload notification channel: `FTP_NOTIFY_URL` (default
+  `ipc:///tmp/snapshot-processor-ftp.sock`) is the ZeroMQ endpoint the FTP
+  program connects to and the pipeline binds. Both programs read the same
+  variable, so a value only needs to be set if the endpoint must move; an empty
+  value disables the channel on both sides and leaves the file system watcher as
+  the only trigger. A stale socket file from an unclean shutdown is removed by
+  the listener before it binds.
 - Snapshot timestamps: `CAMERA_TIMEZONE` (falls back to `TZ`, then the
   container's local zone) is the zone used to interpret camera file names such
   as `HMDAlarm_20261102-105249.jpg`/`MDAlarm_20261101_063000.jpg`, which carry
@@ -106,11 +113,47 @@ section so the app runs with zero external dependencies:
   cannot be analysed, notably the cameras' `.mkv` alarm clips under
   `<camera>/record/`, skips detection and goes straight to cloud storage. This
   lives in `GoogleDriveUploader._should_archive()`. The uploader only runs image
-  validation (`Image.open(...).verify()`) on `image/*` MIME types, waits for an
-  upload to stop growing before using it (`wait_for_settled_snapshot()`), and
-  never overwrites an upload: `create_derived_snapshot_path()` prefixes
-  (`detect_<camera name>.jpg`) and `mark_human_snapshot()` copies the original to
-  `human_<camera name>.jpg`.
+  validation (`Image.open(...).load()`, never `verify()`, which does not look at
+  pixel data and so cannot see a truncated file) on `image/*` MIME types, waits
+  for an upload to stop growing before using it
+  (`wait_for_settled_snapshot()`), and never overwrites an upload:
+  `create_derived_snapshot_path()` prefixes (`detect_<camera name>.jpg`) and
+  `mark_human_snapshot()` copies the original to `human_<camera name>.jpg`.
+- Upload completion: the FTP server — the process that actually performs the
+  transfer — announces a completed upload to the pipeline over a ZeroMQ `ipc://`
+  channel (`FtpUploadNotifier` → `FtpUploadListener`, `FTP_NOTIFY_URL`; see
+  `mq.md` §1.4). That is the authoritative "the last byte has landed" signal,
+  with the file size and mtime attached. The file system watcher remains the
+  fallback, and it is the only trigger for anything that does not arrive over
+  FTP: processing is driven by the events that mean *the writer is done* —
+  `FileClosedEvent` (inotify `IN_CLOSE_WRITE`) and `FileMovedEvent` (an atomic
+  rename into place) — never by `FileModifiedEvent`. Acting on writes let a
+  still-uploading file be read as a truncated snapshot, and because the path was
+  then cached the completed file was never analysed.
+  `wait_for_settled_snapshot()` remains a bounded backstop (size *and*
+  `st_mtime_ns` unchanged across two samples, 2 s budget); it cannot distinguish
+  a paused transfer from a finished one, which is why the trigger carries the
+  meaning. `_read_snapshot()` then checks that the bytes it read are the whole
+  file (`len(bytes) == getsize()`), re-reads if the file grew underneath it, and
+  an upload that fails to decode is left uncached so a later event can retry it.
+  A writer that never closes the file (none in this application: pyftpdlib
+  closes at the end of `STOR`, and our own writes are closed) would not be
+  picked up.
+- Truncated snapshots: a camera can stop mid-upload (or a camera response can be
+  cut short), leaving a JPEG whose header parses but whose scan data is
+  incomplete. `Image.open()` only reads the header and `Image.verify()` does not
+  decode pixels, so truncation is only detectable by decoding:
+  `decode_snapshot_image()` does that (`load()`) and raises
+  `SnapshotDecodeError` — an `OSError`, so the camera-fetch retry loop and the
+  uploader's "corrupted image" path handle it unchanged. The detector reports it
+  once as `Rejecting truncated or unreadable snapshot` (ERROR, carrying
+  `snapshot_path`, `device_label`, `image_source`, `image_size_bytes` and the
+  Pillow message) and skips the image, rather than letting
+  `image file is truncated` surface from inside the Ultralytics loader. Detector
+  logs identify the snapshot through `snapshot_log_context()`:
+  `snapshot_path`, `snapshot_file_name`, `device_label`, `image_source` (`fetch`
+  or `upload`) and `image_size_bytes` — both the truncation ERROR and the generic
+  `Local detection error.` carry them.
 - Recording gate: a recording (any `video/*` upload, i.e. the `.mkv` clips) is
   archived **only** when the same device detected a person/face within
   `RECORDING_DETECTION_WINDOW_SECONDS` (default `60`) of the recording's

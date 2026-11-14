@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import copy
 import hashlib
+import json
 import logging
 import os
 import os.path
@@ -24,6 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import boto3
 import dateutil.parser
 import requests
+import sentry_sdk
 import umsgpack as msgpack
 import zmq
 from botocore.exceptions import EndpointConnectionError
@@ -43,6 +45,8 @@ from pydrive2.drive import GoogleDrive
 from pydrive2.files import ApiRequestError, FileNotUploadedError
 from requests.adapters import ConnectionError
 from requests.exceptions import RequestException, Timeout
+from sentry_sdk.serializer import serialize
+from sentry_sdk.types import Event, Hint
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
 from watchdog.events import (
@@ -54,6 +58,7 @@ from watchdog.events import (
 from watchdog.observers import Observer
 from zmq import ContextTerminated
 
+from app import FTP_NOTIFY_URL
 from tailucas_pylib import APP_NAME, DEVICE_NAME, app_config, log, threads
 from tailucas_pylib.app import AppThread, ZmqRelay
 from tailucas_pylib.aws.metrics import post_count_metric
@@ -156,6 +161,13 @@ HEARTBEAT_INTERVAL_SECONDS = 5
 SNAPSHOT_READ_ATTEMPTS = 10
 SNAPSHOT_READ_DELAY_SECONDS = 0.2
 
+# Sentry rejects (and silently discards) any event larger than 1 MB. Snapshots
+# are large and a detection error attaches the image twice - once as a frame
+# local and once inside the publisher payload - so the payload has to be bounded
+# for such failures to be recorded at all.
+SENTRY_EVENT_SIZE_LIMIT_BYTES = 1024 * 1024
+SENTRY_MAX_VALUE_LENGTH = 1024
+
 # snapshots this application produces itself carry one of these name prefixes
 # (see create_snapshot_path and create_derived_snapshot_path); they are archived
 # but never re-analysed. Prefixes are matched on the base name only so that a
@@ -164,6 +176,14 @@ DERIVED_SNAPSHOT_PREFIXES = ("fetch_", "detect_", "human_")
 
 # still images are analysed; everything else (recordings, ...) is archived as-is
 DETECTABLE_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
+
+
+def optional_file_size(file_path: str) -> int | None:
+    """Size of a file, or None when it is gone or unreadable."""
+    try:
+        return os.path.getsize(file_path)
+    except OSError:
+        return None
 
 
 def is_derived_snapshot(snapshot_path: str) -> bool:
@@ -176,21 +196,85 @@ def is_fetched_snapshot(snapshot_path: str) -> bool:
     return os.path.basename(snapshot_path).startswith("fetch_")
 
 
+class SnapshotDecodeError(OSError):
+    """Raised when snapshot bytes do not decode into a usable image.
+
+    Subclasses ``OSError`` because that is what Pillow itself raises, so
+    existing ``except OSError`` handlers (the camera fetch retry, the uploader)
+    keep working unchanged.
+    """
+
+
+def decode_snapshot_image(image_bytes: bytes) -> Image.Image:
+    """Fully decode snapshot bytes, so truncation is caught before use.
+
+    ``Image.open()`` only parses the header and ``Image.verify()`` does not
+    touch the pixel data, so a camera that stops mid-upload is otherwise only
+    discovered by the first consumer that decodes the image: Ultralytics, which
+    raises "image file is truncated" from deep inside its loader.
+
+    Raises ``SnapshotDecodeError`` so a caller can report one bounded error and
+    skip the image instead of surfacing a stack trace from a dependency.
+    """
+    try:
+        image = Image.open(BytesIO(image_bytes))
+        image.load()
+    except (OSError, SyntaxError, ValueError) as e:
+        raise SnapshotDecodeError(str(e)) from e
+    if image.format is None:
+        raise SnapshotDecodeError(f"unrecognised image format: {image!s}")
+    return image
+
+
+def snapshot_log_context(
+    snapshot_path: str, device_label: str, image_source: str, image_size_bytes: int | None = None
+) -> dict[str, Any]:
+    """Fields that identify a snapshot in a log record.
+
+    The file name is carried alongside the path because a camera names its own
+    uploads (``HMDAlarm_20261102-105249.jpg``) while this application names the
+    snapshots it fetches, and ``image_source`` says which of the two a record is
+    about: ``fetch`` for an image pulled from a camera, ``upload`` for one a
+    camera pushed over FTP.
+    """
+    context: dict[str, Any] = {
+        "snapshot_path": snapshot_path,
+        "snapshot_file_name": os.path.basename(snapshot_path),
+        "device_label": device_label,
+        "image_source": image_source,
+    }
+    if image_size_bytes is not None:
+        context["image_size_bytes"] = image_size_bytes
+    return context
+
+
 def wait_for_settled_snapshot(snapshot_path: str) -> bool:
     """Wait for an upload to stop growing, so a partial file is never processed.
+
+    This is a backstop, not the primary signal: a snapshot event on its own says
+    nothing about whether the writer is finished, and two size samples a moment
+    apart do not prove it either (a camera that pauses mid-transfer looks
+    settled). The watcher therefore acts on close/move events, which are the
+    writer's own "I am done" (see ``UploadEventHandler``), and this check only
+    covers writers whose writes are still catching up. Size *and* modification
+    time have to be unchanged, so a same-size rewrite is not mistaken for a
+    settled file.
 
     Returns False when the file never settles within the budget (the caller can
     retry later) or cannot be read at all.
     """
-    previous_size = None
+    previous_stat = None
     for _ in range(SNAPSHOT_READ_ATTEMPTS):
         try:
-            size = os.path.getsize(snapshot_path)
+            snapshot_stat = os.stat(snapshot_path)
         except OSError:
-            size = None
-        if size is not None and size > 0 and size == previous_size:
-            return True
-        previous_size = size
+            snapshot_stat = None
+        if snapshot_stat is not None and snapshot_stat.st_size > 0 and previous_stat is not None:
+            unchanged = snapshot_stat.st_size == previous_stat.st_size
+            unchanged = unchanged and snapshot_stat.st_mtime_ns == previous_stat.st_mtime_ns
+            if unchanged:
+                return True
+        previous_stat = snapshot_stat
         sleep(SNAPSHOT_READ_DELAY_SECONDS)
     return False
 
@@ -547,11 +631,11 @@ class Snapshot(ZmqRelay):
                             attributes={"device": normalize_device_name(device_label)},
                         )
                         image_data = r.content
-                        im = Image.open(BytesIO(image_data))
-                        if im.format is not None:
-                            break
-                        else:
-                            raise AssertionError(f"Bad image data detected: {im!s}")
+                        # decode fully here so a truncated camera response is
+                        # retried rather than persisted, published for detection,
+                        # and only then failing when it is saved
+                        im = decode_snapshot_image(image_data)
+                        break
                     except (
                         OSError,
                         ConnectionError,
@@ -575,7 +659,7 @@ class Snapshot(ZmqRelay):
                             )
                             post_count_metric("Errors")
                             break
-            if image_data is not None and im is not None and im.format is not None:
+            if image_data is not None and im is not None:
                 # construct message to publish
                 unix_timestamp = int((timestamp.replace(tzinfo=None) - datetime(1970, 1, 1)).total_seconds())
                 record_image_source(image_source="fetch", device_label=device_label)
@@ -1093,9 +1177,19 @@ class GoogleDriveUploader(AppThread, GoogleDriveManager):
         if mime_type is None or mime_type.startswith("image/"):
             try:
                 with Image.open(file_path) as img:
-                    img.verify()
+                    # load() decodes the pixel data, which is the only check that
+                    # catches a truncated upload; verify() only reads the header
+                    img.load()
             except OSError, SyntaxError:
-                log.warning("Not uploading corrupted image file", extra={"file_path": file_path})
+                log.warning(
+                    "Not uploading corrupted image file",
+                    extra={
+                        "file_path": file_path,
+                        "file_name": os.path.basename(file_path),
+                        "file_size_bytes": optional_file_size(file_path),
+                        "mime_type": mime_type,
+                    },
+                )
                 return True
         file_size = os.path.getsize(filename=file_path)
         log.debug(
@@ -1262,6 +1356,9 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         self._mq_device_topic = mq_device_topic
         self._path_cache: LRUCache = LRUCache(maxsize=128)
         self._pipeline_enabled = True
+        # events arrive from the watchdog observer thread and from the FTP
+        # notification listener, so the hand-off to the pipeline is serialised
+        self._event_lock = threading.Lock()
 
     def start(self):
         # Closable creates the pipeline socket lazily and on_fs_event() sends on
@@ -1333,17 +1430,19 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
 
     # if a snapshot has been fully written
     def on_closed(self, event):
+        # IN_CLOSE_WRITE is the writer saying "done": this is the trigger, because
+        # a file that is only being written to is not a snapshot yet
         if isinstance(event, FileClosedEvent):
             src_path = self._decode_path(event.src_path)
             log.debug("File closed event", extra={"src_path": src_path})
+            self._safe_fs_event(snapshot_path=src_path)
 
-    # we listen to on-modified events because the file is
-    # created and then written to subsequently.
+    # writes are logged for diagnosis but never processed: acting on them is what
+    # let a partially uploaded file be read as a truncated snapshot
     def on_modified(self, event):
         if isinstance(event, FileModifiedEvent):
             src_path = self._decode_path(event.src_path)
             log.debug("File modified event", extra={"src_path": src_path})
-            self._safe_fs_event(snapshot_path=src_path)
 
     def _safe_fs_event(self, snapshot_path: str):
         # a handler exception escapes watchdog's dispatch loop and kills the
@@ -1383,6 +1482,13 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
         )
 
     def on_fs_event(self, snapshot_path: str):
+        # two sources can report the same upload - the FTP completion
+        # notification and the file system watcher - so only one of them may act
+        # on a path at a time; whichever arrives second sees it in the cache
+        with self._event_lock:
+            self._process_snapshot_event(snapshot_path)
+
+    def _process_snapshot_event(self, snapshot_path: str):
         if threads.shutting_down:
             log.debug(
                 "Ignoring file system event due to shutdown",
@@ -1461,6 +1567,129 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
             self._path_cache[snapshot_path] = True
 
 
+class FtpUploadListener(AppThread):
+    """Receive the FTP server's "this upload is complete" notifications.
+
+    The FTP server is a separate program, so on the file system a finished
+    upload and one that is still being written look identical: only the process
+    doing the transfer knows when the last byte has landed. It says so over a
+    ZeroMQ ipc channel, which frees the receiver from inferring completion (and
+    from waiting for a file to look quiet).
+
+    The file system watcher stays in place. This channel is an optimisation and
+    a context carrier, never the only way an upload can be noticed, and a
+    notification is only ever treated as "look at this path now": the file is
+    still read, size-checked and decoded by the consumer.
+    """
+
+    def __init__(self, notify_url: str, upload_event_handler: UploadEventHandler):
+        AppThread.__init__(self, name=self.__class__.__name__)
+        self._notify_url = notify_url
+        self._upload_event_handler = upload_event_handler
+
+    def run(self):
+        self._remove_stale_endpoint()
+        # a broken notification channel must not stop the pipeline: the watcher
+        # still sees uploads, so log the failure and let this thread end
+        with exception_handler(
+            connect_url=self._notify_url,
+            socket_type=zmq.PULL,
+            and_raise=False,
+            shutdown_on_error=False,
+        ) as notification_socket:
+            log.info(
+                "Listening for FTP upload notifications",
+                extra={"notify_url": self._notify_url},
+            )
+            while not threads.shutting_down:
+                try:
+                    message = notification_socket.recv(flags=zmq.NOBLOCK)
+                except zmq.Again:
+                    threads.interruptable_sleep.wait(1)
+                    continue
+                self._handle_notification(message)
+
+    def _remove_stale_endpoint(self) -> None:
+        """Remove a leftover ipc socket file so a restart can bind it again.
+
+        A clean shutdown removes the file, so a leftover means the previous
+        process died without closing it - and ``bind`` fails while the file
+        exists. One pipeline process runs per container, so nothing else can own
+        the endpoint.
+        """
+        if not self._notify_url.startswith("ipc://"):
+            return
+        endpoint_path = self._notify_url[len("ipc://") :]
+        if not os.path.exists(endpoint_path):
+            return
+        try:
+            os.unlink(endpoint_path)
+        except OSError as e:
+            log.warning(
+                "Unable to remove stale FTP notification endpoint",
+                extra={"endpoint_path": endpoint_path, "error": str(e)},
+            )
+        else:
+            log.warning("Removed stale FTP notification endpoint", extra={"endpoint_path": endpoint_path})
+
+    def _handle_notification(self, message: bytes) -> None:
+        try:
+            notification = msgpack.unpackb(message)
+            snapshot_path = notification["file"]
+            reported_size = notification.get("file_size_bytes")
+        except Exception as e:
+            log.warning(
+                "Ignoring malformed FTP upload notification",
+                extra={"message_bytes": len(message), "error": str(e)},
+            )
+            return
+        if not isinstance(snapshot_path, str) or len(snapshot_path) == 0:
+            log.warning(
+                "Ignoring FTP upload notification without a path",
+                extra={"message_bytes": len(message)},
+            )
+            return
+        on_disk_size = optional_file_size(snapshot_path)
+        if on_disk_size is None:
+            # the camera's upload was removed (or never landed): the watcher would
+            # have nothing to read either, so this is only worth a warning
+            log.warning(
+                "FTP upload notification for a missing file",
+                extra={"snapshot_path": snapshot_path},
+            )
+            return
+        if reported_size is not None and on_disk_size != reported_size:
+            # the name was re-used after the transfer, so the notification is
+            # stale; the file is closed either way, and the path cache decides
+            # whether it still needs analysing
+            log.warning(
+                "FTP upload notification size differs from the file on disk",
+                extra={
+                    "snapshot_path": snapshot_path,
+                    "file_size_bytes": on_disk_size,
+                    "reported_size_bytes": reported_size,
+                },
+            )
+        log.debug(
+            "FTP upload notification received",
+            extra={
+                "snapshot_path": snapshot_path,
+                "snapshot_file_name": os.path.basename(snapshot_path),
+                "file_size_bytes": on_disk_size,
+                "username": notification.get("username"),
+                "remote_ip": notification.get("remote_ip"),
+            },
+        )
+        try:
+            self._upload_event_handler.on_fs_event(snapshot_path=snapshot_path)
+        except Exception as e:
+            log.exception(
+                "Failed to process FTP upload notification",
+                extra={"snapshot_path": snapshot_path},
+            )
+            record_exception(e)
+
+
 class ObjectDetector(ZmqRelay):
     def __init__(self):
         ZmqRelay.__init__(
@@ -1500,42 +1729,53 @@ class ObjectDetector(ZmqRelay):
 
     @staticmethod
     def _read_snapshot(snapshot_path: str) -> bytes | None:
-        """Read a snapshot that landed on the file system, waiting for it to settle.
+        """Read a snapshot that landed on the file system, once it has settled.
 
-        Uploads arrive in chunks, so a file system event can fire while the file
-        is still incomplete. Wait for the size to stop growing before reading, and
-        give up (rather than raising) if the file never becomes readable: one bad
-        snapshot must not bring the detection thread down.
+        Uploads arrive in chunks, so the file may still be growing when the file
+        system event arrives. Wait for the writer to stop, then verify that what
+        was read is the whole file: if the file grew while it was being read,
+        the bytes are a prefix of an image and cannot decode, so read again.
+        Give up (rather than raising) if the file never settles or cannot be
+        read - one bad snapshot must not bring the detection thread down - and
+        leave the path uncached so a later event can retry it.
         """
-        previous_size = None
+        if not wait_for_settled_snapshot(snapshot_path):
+            log.warning(
+                "Snapshot never settled for reading",
+                extra={"snapshot_path": snapshot_path, "attempts": SNAPSHOT_READ_ATTEMPTS},
+            )
+            return None
+        file_size = None
         for attempt in range(1, SNAPSHOT_READ_ATTEMPTS + 1):
             try:
-                size = os.path.getsize(snapshot_path)
+                with open(snapshot_path, "rb") as snapshot_file:
+                    image_bytes = snapshot_file.read()
+                file_size = os.path.getsize(snapshot_path)
             except OSError as e:
-                log.debug(
-                    "Snapshot not readable yet",
-                    extra={"snapshot_path": snapshot_path, "attempt": attempt, "error": str(e)},
+                log.warning(
+                    "Problem reading snapshot",
+                    extra={"snapshot_path": snapshot_path, "error": str(e)},
                 )
-                size = None
-            if size is not None and size > 0 and size == previous_size:
-                try:
-                    with open(snapshot_path, "rb") as img_file:
-                        return img_file.read()
-                except OSError as e:
-                    log.warning(
-                        "Problem reading snapshot",
-                        extra={"snapshot_path": snapshot_path, "error": str(e)},
-                    )
-                    record_exception(e)
-                    return None
-            previous_size = size
+                record_exception(e)
+                return None
+            if len(image_bytes) == file_size:
+                return image_bytes
+            log.debug(
+                "Snapshot grew while being read",
+                extra={
+                    "snapshot_path": snapshot_path,
+                    "attempt": attempt,
+                    "bytes_read": len(image_bytes),
+                    "file_size_bytes": file_size,
+                },
+            )
             sleep(SNAPSHOT_READ_DELAY_SECONDS)
         log.warning(
-            "Snapshot never settled for reading",
+            "Snapshot kept growing while being read; will retry",
             extra={
                 "snapshot_path": snapshot_path,
                 "attempts": SNAPSHOT_READ_ATTEMPTS,
-                "size_bytes": previous_size,
+                "file_size_bytes": file_size,
             },
         )
         return None
@@ -1591,9 +1831,9 @@ class ObjectDetector(ZmqRelay):
                 if is_flag_enabled(FEATURE_FLAG_LOCAL_OBJECT_DETECTION) and self._local_model is not None:
                     results = None
                     try:
-                        # opening is inside the guard: a truncated upload must not
+                        # decoding is inside the guard: a truncated upload must not
                         # escape into the ZMQ relay loop
-                        im = Image.open(BytesIO(image_bytes))
+                        im = decode_snapshot_image(image_bytes)
                         start_time = time.time() * 1000
                         results = self._local_model.predict(source=im, conf=self._minimum_confidence)
                         end_time = time.time() * 1000
@@ -1601,8 +1841,36 @@ class ObjectDetector(ZmqRelay):
                             end_time - start_time,
                             attributes={"device": normalize_device_name(device_label)},
                         )
+                    except SnapshotDecodeError as e:
+                        # a camera that stops mid-upload loses that snapshot: report
+                        # it as one structured record, not a stack trace from inside
+                        # the model loader
+                        log.error(
+                            "Rejecting truncated or unreadable snapshot",
+                            extra=snapshot_log_context(
+                                snapshot_path=snapshot_path,
+                                device_label=device_label,
+                                image_source=image_source,
+                                image_size_bytes=len(image_bytes),
+                            )
+                            | {"error": str(e)},
+                        )
+                        record_exception(e)
+                        if image_source == "upload":
+                            # the file may have been read while it was still being
+                            # written: uncache it so a later file system event can
+                            # try again instead of the snapshot being lost
+                            self._path_cache.pop(snapshot_path, None)
                     except Exception as e:
-                        log.exception("Local detection error.")
+                        log.exception(
+                            "Local detection error.",
+                            extra=snapshot_log_context(
+                                snapshot_path=snapshot_path,
+                                device_label=device_label,
+                                image_source=image_source,
+                                image_size_bytes=len(image_bytes),
+                            ),
+                        )
                         record_exception(e)
                     if results:
                         # find Person labels
@@ -1838,7 +2106,68 @@ class TracingRabbitMQRelay(RabbitMQRelay):
             raise ResourceWarning() from e
 
 
+def _sentry_event_size_bytes(event: Event) -> int:
+    """Size of an event the way the transport would serialise it."""
+    return len(json.dumps(serialize(cast(dict[str, Any], event))).encode())
+
+
+def sentry_before_send(event: Event, hint: Hint) -> Event | None:
+    """Keep Sentry payloads inside the ingest limit instead of losing them.
+
+    Sentry discards oversized events and reports nothing back, so a failure
+    carrying a camera-sized payload vanishes without a trace. Shed the bulky
+    sections rather than dropping the failure, and say so when even that is not
+    enough.
+    """
+    event_size = _sentry_event_size_bytes(event)
+    if event_size <= SENTRY_EVENT_SIZE_LIMIT_BYTES:
+        return event
+    removed_sections = []
+    for exception_value in event.get("exception", {}).get("values", []):
+        for frame in (exception_value.get("stacktrace") or {}).get("frames", []):
+            if frame.pop("vars", None) is not None:
+                removed_sections.append("frame_variables")
+    # TypedDict keys have to be literals, so shed the sections through a plain dict
+    payload = cast(dict[str, Any], event)
+    for section in ("extra", "breadcrumbs", "request"):
+        if payload.pop(section, None) is not None:
+            removed_sections.append(section)
+    trimmed_size = _sentry_event_size_bytes(event)
+    extra = {
+        "event_size_bytes": event_size,
+        "trimmed_size_bytes": trimmed_size,
+        "removed_sections": removed_sections,
+    }
+    if trimmed_size > SENTRY_EVENT_SIZE_LIMIT_BYTES:
+        log.warning("Dropping oversized Sentry event", extra=extra)
+        return None
+    log.warning("Trimmed oversized Sentry event", extra=extra)
+    return event
+
+
+def configure_sentry() -> None:
+    """Initialise Sentry with a bounded event payload.
+
+    ``tailucas_pylib`` initialises the SDK at import time with the library
+    defaults, ``include_local_variables=True`` and ``max_value_length=None``.
+    Frame locals here hold the raw snapshot, and the publisher payload holds a
+    second copy, so every error raised while handling an image produced a
+    multi-megabyte event that Sentry discarded as ``invalid: too_large:event``
+    without any feedback: the failure was visible in the trace and logs but
+    never became a Sentry issue. Bounding the payload, and screening it again
+    before it is sent, keeps those failures reportable.
+    """
+    sentry_sdk.init(
+        send_default_pii=True,
+        max_value_length=SENTRY_MAX_VALUE_LENGTH,
+        before_send=sentry_before_send,
+    )
+
+
 def main():
+    # bound the Sentry payload before any thread can report a camera-sized
+    # failure (the pylib initialises the SDK with unbounded frame locals)
+    configure_sentry()
     # control listener
     mq_server_address = app_config.get("rabbitmq", "server_address")
     mq_exchange_name = app_config.get("rabbitmq", "mq_exchange")
@@ -1936,6 +2265,20 @@ def main():
         )
     # only notify the pipeline if something is consuming it
     upload_event_handler.pipeline_enabled = object_detector is not None
+    # the FTP server is a separate program and tells us when an upload completed;
+    # the file system watcher remains the fallback, so a missing channel is not
+    # a hard dependency
+    ftp_upload_listener = None
+    if len(FTP_NOTIFY_URL) > 0:
+        ftp_upload_listener = FtpUploadListener(
+            notify_url=FTP_NOTIFY_URL,
+            upload_event_handler=upload_event_handler,
+        )
+    else:
+        log.warning(
+            "Not listening for FTP upload notifications; relying on file system events only",
+            extra={"config_option": "FTP_NOTIFY_URL"},
+        )
     # ensure that auth is properly set up first
     google_drive_uploader = None
     google_drive_archiver = None
@@ -2002,6 +2345,8 @@ def main():
             google_drive_archiver.start()
         # start processing file system events
         upload_event_handler.start()
+        if ftp_upload_listener is not None:
+            ftp_upload_listener.start()
         # start thread nanny
         nanny = threading.Thread(daemon=True, name="nanny", target=thread_nanny, args=(signal_handler,))
         nanny.start()

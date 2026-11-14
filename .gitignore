@@ -7,3 +7,10 @@ data/
 venv/
 .env
 *.code-workspace
+
+# Python bytecode: __pycache__ is created at any depth, including inside
+# subpackages, so cover the directory form as well as stray bytecode files
+__pycache__/
+**/__pycache__/
+__pycache__/**
+*.py[cod]

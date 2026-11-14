@@ -48,8 +48,9 @@ application lives in `app/__main__.py` with a separate FTP server module.
   `tailucas-pylib[...]` extras, never vendored copies. Lint with
   `make lint` (`ruff format .`, `ruff check .`, `mypy app/`) before
   considering work done.
-- Sentry is initialized in `main()` after credential validation; OTEL
-  providers are set up by the pylib import (see `observability.md`).
+- Sentry is initialized in `main()` by `configure_sentry()` with a **bounded**
+  event payload; OTEL providers are set up by the pylib import (see
+  `observability.md`).
 
 ## 3. Configuration & Environment
 

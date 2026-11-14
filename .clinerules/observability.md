@@ -114,3 +114,35 @@ promptly.
   carry nonzero `trace_id`/`span_id` at a local stub collector.
 - `OTEL_SDK_DISABLED=true` suppresses export while spans still record in
   memory — assert on what leaves the process, never on `isRecording()`.
+
+## 5. Sentry (event payload bounds)
+
+Sentry is a **separate pipeline** from OTEL. `tailucas_pylib` calls
+`sentry_sdk.init(send_default_pii=True)` at import time, and the SDK's default
+`LoggingIntegration` turns every `ERROR`-level log record into an event, so
+`log.error()`/`log.exception()` reach Sentry without any explicit capture.
+`tailucas_pylib.tracing.record_exception()` does **not** — it writes to the
+active OTEL span only. A failure can therefore appear in Loki/Tempo and be
+missing from Sentry, which is what happened here.
+
+- **The SDK defaults are unbounded.** `include_local_variables=True` and
+  `max_value_length=None`, so every frame local is serialised in full. In this
+  application the frame locals of `ObjectDetector.process_message` hold the raw
+  snapshot bytes *and* the publisher payload holds a second copy, which made a
+  single detection error a multi-megabyte event.
+- **Sentry discards oversized events silently.** Anything over 1 MB is rejected
+  server-side as `invalid: too_large:event`; the client gets no error, the log
+  line looks fine, and the issue never appears. Use
+  `find_dropped_events(dataset="errors")` to confirm — an empty accepted set
+  with `too_large:event` drops is the signature.
+- **`main()` re-initialises the SDK with a bound.** `configure_sentry()` sets
+  `max_value_length=SENTRY_MAX_VALUE_LENGTH` (1 KiB per string, so locals stay
+  useful) and installs `sentry_before_send`, which measures the serialised
+  payload, sheds `frame_variables`/`extra`/`breadcrumbs` when an event is still
+  too big, and logs `Dropping oversized Sentry event` rather than losing it
+  without a trace. Re-initialising is safe: it inherits the DSN from
+  `SENTRY_DSN`, keeps the pylib's `ignore_logger()` list, and does not double
+  capture events.
+- **Rule:** never log a raw camera artefact. Report the failure with scalars
+  (`image_size_bytes`, `file_path`, the exception text) and let the log-derived
+  event stay small enough to ingest.

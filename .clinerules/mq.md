@@ -10,7 +10,9 @@ snapshot-processor uses two messaging technologies for two different jobs.
 They are **not interchangeable** and are documented in separate sections
 below. The guiding rule is to match the transport to the boundary it crosses:
 
-- **ZeroMQ** moves data *inside* a process, between threads, with no broker.
+- **ZeroMQ** moves data between threads *and* between our own processes, with no
+  broker: `inproc://` inside a process, `ipc://` between the two programs in the
+  container (see §1.4).
 - **RabbitMQ** moves data *between* processes/services, through a broker.
 
 The Python implementations live in `app/__main__.py` and the shared
@@ -25,9 +27,11 @@ in `pyproject.toml` (via `tailucas-pylib[mq]`) pulls `pika` (RabbitMQ) and
 ZeroMQ is the default inter-thread transport in snapshot-processor. It is a
 **brokerless socket library**, not a message broker: there is no server, no
 queue persistence, and no delivery guarantee beyond what the socket pattern
-itself provides. In this project it is used over the `inproc://` transport,
-which means messages never leave the process — they are handed between threads
-through memory, giving "lockless" communication with no shared mutable state.
+itself provides. It is used over two transports: `inproc://` for the in-process
+pipeline (below) and `ipc://` for the completion channel between this
+application and the FTP program (§1.4). Over `inproc://` messages never leave
+the process — they are handed between threads through memory, giving "lockless"
+communication with no shared mutable state.
 
 ### The pipeline pattern (PUSH/PULL)
 
@@ -78,6 +82,46 @@ socket. This is a **synchronous, one-request-one-reply** contract — the
 client blocks until the reply arrives, and the worker must reply before it
 can receive again. Use it for in-process command/query style interactions
 where a return value is required, not for fire-and-forget data flow.
+
+### 1.4 The cross-process completion channel (`ipc://`)
+
+The FTP server is a **separate program** (`uv run ftp`, its own supervised
+entry) from the pipeline (`uv run app`), so a ZeroMQ `inproc://` socket cannot
+reach it. When two of *our own* processes need to talk, they use the same
+PUSH/PULL pattern over the `ipc://` transport — a unix domain socket, no
+broker, no network:
+
+```
+FTP server (PUSH, connects) ──ipc──► FtpUploadListener in the app (PULL, binds)
+```
+
+- **One purpose:** the FTP server reports that a transfer completed
+  (`on_file_received`), with the path, size, mtime, user and client address. On
+  the file system a finished upload and one still being written are
+  indistinguishable, and only the process doing the transfer knows the
+  difference — this is that knowledge crossing a process boundary.
+- **The consumer binds, the producer connects**, matching the pylib convention
+  (`exception_handler`/`Closable` bind `PULL`/`PUB`/`REP` and connect
+  `PUSH`/`REQ`). A PUSH connect queues while the consumer is down, so start
+  order does not matter; `send(..., NOBLOCK)` with `LINGER=0` means a
+  notification can never block a transfer or a shutdown.
+- **Payloads are MessagePack** (`umsgpack`), never pickle: `recv_pyobj` would
+  accept arbitrary pickles from anything that can reach the socket.
+- **Notifications are advisory.** The receiver still treats a message as "look
+  at this path now": it validates the path is inside the snapshot root and maps
+  to a configured camera, compares the reported size with what is on disk, and
+  the consumer still reads, size-checks and decodes the file. The watchdog
+  triggers stay in place, so a missing or broken channel degrades the pipeline
+  to exactly its previous behaviour rather than losing uploads. The listener
+  therefore runs with `shutdown_on_error=False`: it is an optimisation, never a
+  hard dependency (`FTP_NOTIFY_URL=""` disables it on both sides).
+- **Duplicates are expected.** The same upload can arrive twice (notification
+  and `IN_CLOSE_WRITE`), so `UploadEventHandler.on_fs_event()` serialises on a
+  lock and its path cache makes the second report a no-op.
+
+**Rule:** cross-process ZeroMQ is for *our own* programs in one container and
+for advisory signals. Anything that must not be lost, or that crosses to
+another service, goes over RabbitMQ (below).
 
 ---
 
