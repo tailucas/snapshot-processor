@@ -341,7 +341,7 @@ The `UploadEventHandler` in `app/__main__.py` watches the snapshot tree:
   time from the camera's own file name
 - Triggers the analysis pipeline for still images (the FTP server's ZeroMQ
   completion notification is the primary trigger; this is the fallback) and
-  queues everything else - detection artefacts, `human_` markers and `.mkv`
+  queues everything else - detection artefacts, `<class>_` markers and `.mkv`
   recordings - for cloud archiving
 
 ## Build System

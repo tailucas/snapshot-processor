@@ -109,9 +109,9 @@ section so the app runs with zero external dependencies:
   as unmapped and ignored. Still images (`.jpg`, `.jpeg`, `.png`) follow exactly
   the same rules whether they were pulled from a camera or uploaded by one: they
   are analysed, and the image itself is **not** archived — only its derived
-  artefacts are (the `detect_<class>_*` annotated result, e.g. `detect_human_*`,
-  and the `human_*` marker). Anything that
-  cannot be analysed, notably the cameras' `.mkv` alarm clips under
+  artefacts are (the `detect_<class>_*` result, e.g. `detect_human_*`, and the
+  `<class>_*` marker, e.g. `human_*`). Anything that cannot be analysed, notably
+  the cameras' `.mkv` alarm clips under
   `<camera>/record/`, skips detection and goes straight to cloud storage. This
   lives in `GoogleDriveUploader._should_archive()`. The uploader only runs image
   validation (`Image.open(...).load()`, never `verify()`, which does not look at
@@ -119,7 +119,8 @@ section so the app runs with zero external dependencies:
   for an upload to stop growing before using it
   (`wait_for_settled_snapshot()`), and never overwrites an upload:
   `create_derived_snapshot_path()` prefixes (`detect_human_<camera name>.jpg`) and
-  `mark_human_snapshot()` copies the original to `human_<camera name>.jpg`.
+  `mark_object_snapshot()` copies the original to `<class>_<camera name>.jpg`
+  (`human_…` for person/face).
 - Upload completion: the FTP server — the process that actually performs the
   transfer — announces a completed upload to the pipeline over a ZeroMQ `ipc://`
   channel (`FtpUploadNotifier` → `FtpUploadListener`, `FTP_NOTIFY_URL`; see
@@ -158,7 +159,7 @@ section so the app runs with zero external dependencies:
 - Snapshot provenance: `is_derived_snapshot()` answers "did *we* write this?",
   using `DerivedSnapshotRegistry`, which records each path immediately before the
   application writes it (`fetch_*` in `Snapshot`, `detect_<class>_*` in
-  `ObjectDetector`, `human_*` in `mark_human_snapshot`). It is deliberately
+  `ObjectDetector`, the `<class>_*` marker in `mark_object_snapshot`). It is deliberately
   **not** a name test: a camera is free to upload `detect_something.jpg`, and
   treating that as our own output skipped analysis *and* silently dropped the
   device event, because `ObjectDetector` is the stage that publishes
@@ -167,8 +168,13 @@ section so the app runs with zero external dependencies:
   drop a detection record.
 - Detection namespace: detection output is named
   `<operation>_<object class>_<source name>` — `detect_human_<name>` for the
-  classes currently recorded (`DETECTED_OBJECT_CLASSES` maps `person`/`face` to
-  `human`) — and `detect_` is a **reserved prefix**. The local model renders the
+  classes currently recorded — and `detect_` is a **reserved prefix**. Labels map
+  to a class token in `DETECTED_OBJECT_CLASSES` (matched exactly,
+  case-insensitively); that mapping is the **only** place a class is added: one
+  entry produces `detect_<class>_*`, the `<class>_*` marker and `N <label>(s)` in
+  the event detail. The **first** class found in an image names its artefacts,
+  and the recording gate reacts only to `HUMAN_OBJECT_CLASS`, so adding a class
+  can never justify archiving a clip on its own. The local model renders the
   annotated image; the Rekognition path has no render to save, so it writes the
   source bytes under the same name, which keeps the artefact set identical
   whichever engine runs. Any file carrying the prefix, from
@@ -179,7 +185,7 @@ section so the app runs with zero external dependencies:
   detector so the device event is still published for event-processor (the
   detector relays without inferring). Our own artefacts produce no second event.
 - Recording gate: a recording (any `video/*` upload, i.e. the `.mkv` clips) is
-  archived **only** when the same device detected a person/face within
+  archived **only** when the same device detected the human class within
   `RECORDING_DETECTION_WINDOW_SECONDS` (default `60`) of the recording's
   timestamp, on either side. Hits are tracked in `DetectionRegistry` from the
   detector's own timestamps, so a pulled still can justify a clip and vice versa.
@@ -188,7 +194,7 @@ section so the app runs with zero external dependencies:
   `_resolve_pending_recordings()` implement the decision.
 - Local retention (`config/cron/cleanup_snapshots`, installed into the app user's
   crontab at build time — a rebuild is needed to change it): the archive payload
-  (`detect_*`/`human_*`) and anything unexpected survive 48 h (`-mmin +2880`,
+  (`detect_*`/`<class>_*`) and anything unexpected survive 48 h (`-mmin +2880`,
   swept hourly at :30); recordings (`*/record/*`, `*.mkv`, `*.mp4`) are pruned
   after 6 h; `fetch_*` snapshots after 2 h — they are analysis input and are
   never archived. A recording that is discarded by the gate is deleted

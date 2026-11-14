@@ -168,15 +168,12 @@ SNAPSHOT_READ_DELAY_SECONDS = 0.2
 SENTRY_EVENT_SIZE_LIMIT_BYTES = 1024 * 1024
 SENTRY_MAX_VALUE_LENGTH = 1024
 
-# Snapshots this application produces itself carry one of these name prefixes
-# (see create_snapshot_path and create_derived_snapshot_path). A name is only a
-# *convention*: a camera is free to upload a file called "detect_something.jpg",
-# and treating that as our own output would skip analysis and, because the
-# detector is what publishes the device event, silently drop that device's event.
-# Provenance - what this process actually wrote - is what classifies a snapshot;
-# see DerivedSnapshotRegistry. The one exception is detection output, which
-# declares a reserved namespace of its own (DETECTION_ARTEFACT_PREFIX).
-DERIVED_SNAPSHOT_PREFIXES = ("fetch_", "detect_", "human_")
+# Snapshots this application produces itself are identified by provenance (see
+# DerivedSnapshotRegistry), not by name: a camera is free to upload a file called
+# "detect_something.jpg", and treating that as our own output would skip analysis
+# and, because the detector is what publishes the device event, silently drop
+# that device's event. The one exception is detection output, which declares a
+# reserved namespace of its own (DETECTION_ARTEFACT_PREFIX).
 
 # A detection result is named "<operation>_<object class>_<source name>", e.g.
 # detect_human_HMDAlarm_20261102-105249.jpg. Any file carrying this prefix is a
@@ -185,8 +182,24 @@ DERIVED_SNAPSHOT_PREFIXES = ("fetch_", "detect_", "human_")
 # only find what was already found.
 DETECTION_ARTEFACT_PREFIX = "detect_"
 
-# what a detected label is recorded as in an artefact name
+# Model label (matched case-insensitively and exactly) -> object class token used
+# in artefact and marker names. This is the *only* place a new class is added:
+# "dog" here yields detect_dog_<name>, a dog_<name> marker and "1 dog(s)" in the
+# event detail. Class tokens must be single words, since the token is what
+# follows "detect_" in the file name.
 DETECTED_OBJECT_CLASSES = {"person": "human", "face": "human"}
+
+# only a human detection justifies archiving a camera's recording
+HUMAN_OBJECT_CLASS = "human"
+
+# markers are named after the object class they record: human_*, dog_*, ...
+OBJECT_CLASS_MARKER_PREFIXES = tuple(
+    f"{object_class}_" for object_class in sorted(set(DETECTED_OBJECT_CLASSES.values()))
+)
+
+# names this application can write. Provenance is authoritative; these prefixes
+# are the archiving fail-safe, so they only have to cover what we could write.
+DERIVED_SNAPSHOT_PREFIXES = ("fetch_", DETECTION_ARTEFACT_PREFIX, *OBJECT_CLASS_MARKER_PREFIXES)
 
 # still images are analysed; everything else (recordings, ...) is archived as-is
 DETECTABLE_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
@@ -197,9 +210,9 @@ class DerivedSnapshotRegistry:
 
     An entry is recorded before the file is created, so the file system event for
     the write always finds it. The value is the operation that produced the file
-    ("fetch", "detect", "human"), which is what ``mark_human_snapshot`` needs to
-    decide whether to rename (our own fetched snapshot) or copy (a camera upload
-    keeps its original).
+    ("fetch", "detect_<class>", or the marker's class such as "human"), which is
+    what ``mark_object_snapshot`` needs to decide whether to rename (our own
+    fetched snapshot) or copy (a camera upload keeps its original).
     """
 
     def __init__(self, maxsize: int = 1024):
@@ -262,11 +275,18 @@ def is_detection_artefact(snapshot_path: str) -> bool:
 
 
 def detection_object_class(label_name: str) -> str | None:
-    """The object class token a detected label contributes to an artefact name."""
-    for label, object_class in DETECTED_OBJECT_CLASSES.items():
-        if label in label_name:
-            return object_class
-    return None
+    """The object class token a detected label contributes to a name.
+
+    Labels are matched exactly (case-insensitively) against
+    ``DETECTED_OBJECT_CLASSES``, so adding a class is a single mapping entry and a
+    label such as "Surface" can never be mistaken for "face" by a substring match.
+    """
+    return DETECTED_OBJECT_CLASSES.get(label_name.strip().lower())
+
+
+def object_class_summary(class_counts: dict[str, int]) -> str:
+    """Human-readable "2 person(s), 1 face(s)" summary, in first-seen order."""
+    return ", ".join(f"{count} {label}(s)" for label, count in class_counts.items())
 
 
 class SnapshotDecodeError(OSError):
@@ -426,27 +446,28 @@ def create_derived_snapshot_path(snapshot_path: str, operation: str) -> str:
     return os.path.join(directory, f"{operation}_{file_name}")
 
 
-def mark_human_snapshot(snapshot_path: str) -> str:
-    """Persist the "human_" marker for a snapshot that had a person detected.
+def mark_object_snapshot(snapshot_path: str, object_class: str) -> str:
+    """Persist the "<object class>_" marker for a snapshot with that class detected.
 
-    Snapshots this application fetched are never archived, so the original is
-    renamed (long standing behaviour). An uploaded snapshot is archived as it is,
-    so it is copied instead: renaming it would leave the cloud uploader nothing
-    to read. Which of the two applies is decided by provenance, not by the file
-    name, so a camera upload that happens to be called "fetch_..." is still
-    copied rather than renamed away.
+    The marker is named after the class it records (``human_<name>``,
+    ``dog_<name>``). Snapshots this application fetched are never archived, so the
+    original is renamed (long standing behaviour). An uploaded snapshot is
+    archived as it is, so it is copied instead: renaming it would leave the cloud
+    uploader nothing to read. Which of the two applies is decided by provenance,
+    not by the file name, so a camera upload that happens to be called
+    "fetch_..." is still copied rather than renamed away.
     """
-    human_path = create_derived_snapshot_path(snapshot_path, "human")
-    if human_path == snapshot_path:
+    marker_path = create_derived_snapshot_path(snapshot_path, object_class)
+    if marker_path == snapshot_path:
         return snapshot_path
     # record before writing, so the event for the new file can never be mistaken
     # for a camera upload
-    derived_snapshots.register(human_path, "human")
+    derived_snapshots.register(marker_path, object_class)
     if is_fetched_snapshot(snapshot_path):
-        os.rename(snapshot_path, human_path)
+        os.rename(snapshot_path, marker_path)
     else:
-        shutil.copy2(snapshot_path, human_path)
-    return human_path
+        shutil.copy2(snapshot_path, marker_path)
+    return marker_path
 
 
 def create_publisher_struct(device_key, device_label, image_data, image_timestamp, storage_url, storage_path):
@@ -1990,16 +2011,15 @@ class ObjectDetector(ZmqRelay):
                         )
                         record_exception(e)
                     if results:
-                        # find Person labels
-                        person_detected = False
-                        person_count = 0
-                        face_count = 0
+                        # detected label -> count, across all results; the summary
+                        # and the artefact name are both derived from it
+                        detected_labels: dict[str, int] = {}
                         labels = []
                         for result in results:
                             if not isinstance(result, Results):
                                 continue
-                            person_detected = False
-                            object_class = None
+                            # object class -> count within this result
+                            result_classes: dict[str, int] = {}
                             for detect_dict in result.summary():
                                 log.debug("Local inference", extra={"inference": detect_dict})
                                 label_name = detect_dict["name"]
@@ -2009,77 +2029,75 @@ class ObjectDetector(ZmqRelay):
                                     label_confidence * 100,
                                     attributes={"label_name": label_name},
                                 )
-                                label_object_class = detection_object_class(label_name)
-                                if label_object_class is not None:
-                                    person_detected = True
-                                    if object_class is None:
-                                        # the artefact name carries the class that
-                                        # triggered it: detect_<class>_<name>
-                                        object_class = label_object_class
-                                    if "person" in label_name:
-                                        person_count += 1
-                                    else:
-                                        face_count += 1
-                            if person_detected and object_class is not None:
-                                # only archive this device's clips when a person
-                                # or face was seen around the same time
+                                # the model call is already confidence-filtered
+                                normalized_label = label_name.strip().lower()
+                                detected_labels[normalized_label] = detected_labels.get(normalized_label, 0) + 1
+                                object_class = detection_object_class(label_name)
+                                if object_class is None:
+                                    continue
+                                result_classes[object_class] = result_classes.get(object_class, 0) + 1
+                            if not result_classes:
+                                continue
+                            # the first class in the result names the artefacts:
+                            # detect_<class>_<name> and <class>_<name>
+                            object_class = next(iter(result_classes))
+                            if HUMAN_OBJECT_CLASS in result_classes:
+                                # only archive this device's clips when a person or
+                                # face was seen around the same time
                                 detection_registry.record(
                                     device_key=input_device["device_key"],
                                     epoch_timestamp=float(input_device["image_timestamp"]),
                                 )
-                                detect_filename = create_derived_snapshot_path(snapshot_path, f"detect_{object_class}")
-                                log.debug(
-                                    "Saving person detection result",
+                            detect_filename = create_derived_snapshot_path(snapshot_path, f"detect_{object_class}")
+                            log.debug(
+                                "Saving detection result",
+                                extra={"detect_filename": detect_filename, "object_class": object_class},
+                            )
+                            try:
+                                derived_snapshots.register(detect_filename, f"detect_{object_class}")
+                                result.save(filename=detect_filename)
+                            except Exception as e:
+                                log.exception(
+                                    "Unable to save detection result",
                                     extra={"detect_filename": detect_filename},
                                 )
-                                try:
-                                    derived_snapshots.register(detect_filename, f"detect_{object_class}")
-                                    result.save(filename=detect_filename)
-                                except Exception as e:
-                                    log.exception(
-                                        "Unable to save detection result",
-                                        extra={"detect_filename": detect_filename},
-                                    )
-                                    record_exception(e)
-                                human_detect_filename = mark_human_snapshot(snapshot_path)
-                                log.debug(
-                                    "Marked snapshot after person detection",
-                                    extra={
-                                        "snapshot_path": snapshot_path,
-                                        "human_detect_filename": human_detect_filename,
-                                    },
-                                )
+                                record_exception(e)
+                            marker_filename = mark_object_snapshot(snapshot_path, object_class)
+                            log.debug(
+                                "Marked snapshot after detection",
+                                extra={
+                                    "snapshot_path": snapshot_path,
+                                    "marker_filename": marker_filename,
+                                    "object_class": object_class,
+                                },
+                            )
                         log.debug(
                             "YOLO labels found",
                             extra={
                                 "label_count": len(labels),
                                 "device_label": device_label,
+                                "class_counts": detected_labels,
                                 "labels": labels,
                                 "snapshot_path": snapshot_path,
                             },
                         )
-                        if person_detected:
-                            additional_info = ""
-                            if person_count > 0:
-                                additional_info += f"{person_count} person(s)"
-                            if face_count > 0:
-                                if len(additional_info) > 0:
-                                    additional_info += ", "
-                                additional_info += f"{face_count} face(s)"
-                                log.info(
-                                    "Face detected",
-                                    extra={
-                                        "device_label": device_label,
-                                        "image_source": image_source,
-                                        "face_count": face_count,
-                                        "snapshot_path": snapshot_path,
-                                    },
-                                )
+                        if detected_labels:
+                            additional_info = object_class_summary(detected_labels)
                             event_detail = f"{device_label} ({image_source}): {additional_info}."
                             log.debug(
                                 "Object detection event detail",
-                                extra={"event_detail": event_detail},
+                                extra={"event_detail": event_detail, "class_counts": detected_labels},
                             )
+                            if HUMAN_OBJECT_CLASS in detected_labels:
+                                log.info(
+                                    "Human detected",
+                                    extra={
+                                        "device_label": device_label,
+                                        "image_source": image_source,
+                                        "class_counts": detected_labels,
+                                        "snapshot_path": snapshot_path,
+                                    },
+                                )
                             input_device["event_detail"] = additional_info
                 elif self._rekog is not None:
                     log.debug(
@@ -2096,38 +2114,45 @@ class ObjectDetector(ZmqRelay):
                                 "response": response,
                             },
                         )
-                        # find Person labels
-                        person_count = 0
-                        object_class = None
+                        # the class map decides what is recorded, exactly as it does
+                        # for the local model: labels are matched exactly
+                        detected_labels = {}
+                        class_counts: dict[str, int] = {}
                         labels = []
                         if "Labels" in response:
                             for detect_dict in response["Labels"]:
                                 label_name = detect_dict["Name"]
                                 label_confidence = float(detect_dict["Confidence"])
                                 labels.append((label_name, label_confidence))
-                                if label_name == "Person" and label_confidence >= self._minimum_confidence:
-                                    # if instances are provided, sum them
-                                    num_instances = len(detect_dict["Instances"])
-                                    if num_instances > 0:
-                                        person_count += num_instances
-                                    else:
-                                        person_count += 1
-                                    # the same artefact name the local model uses
-                                    object_class = detection_object_class(label_name.lower())
+                                object_class = detection_object_class(label_name)
+                                if object_class is None or label_confidence < self._minimum_confidence:
+                                    continue
+                                # if instances are provided, sum them
+                                num_instances = len(detect_dict.get("Instances", []))
+                                count = num_instances if num_instances > 0 else 1
+                                normalized_label = label_name.strip().lower()
+                                detected_labels[normalized_label] = detected_labels.get(normalized_label, 0) + count
+                                class_counts[object_class] = class_counts.get(object_class, 0) + count
                             log.debug(
                                 "Rekognition labels found",
                                 extra={
                                     "label_count": len(labels),
                                     "device_label": device_label,
                                     "image_source": image_source,
+                                    "class_counts": detected_labels,
                                     "labels": labels,
                                 },
                             )
-                        if person_count > 0 and object_class is not None:
-                            detection_registry.record(
-                                device_key=input_device["device_key"],
-                                epoch_timestamp=float(input_device["image_timestamp"]),
-                            )
+                        if class_counts:
+                            # the first class found names the artefacts
+                            object_class = next(iter(class_counts))
+                            if HUMAN_OBJECT_CLASS in class_counts:
+                                # only archive this device's clips when a person or
+                                # face was seen around the same time
+                                detection_registry.record(
+                                    device_key=input_device["device_key"],
+                                    epoch_timestamp=float(input_device["image_timestamp"]),
+                                )
                             # the cloud service returns boxes, not a rendered image,
                             # so the source is recorded as the detection artefact:
                             # every detection then produces the same
@@ -2143,19 +2168,20 @@ class ObjectDetector(ZmqRelay):
                                     extra={"detect_filename": detect_filename},
                                 )
                                 record_exception(e)
-                            human_detect_filename = mark_human_snapshot(snapshot_path)
+                            marker_filename = mark_object_snapshot(snapshot_path, object_class)
                             log.debug(
-                                "Marked snapshot after person detection",
+                                "Marked snapshot after detection",
                                 extra={
                                     "snapshot_path": snapshot_path,
-                                    "human_detect_filename": human_detect_filename,
+                                    "marker_filename": marker_filename,
+                                    "object_class": object_class,
                                 },
                             )
-                            additional_info = f"{person_count} person(s) and {len(labels)} things"
+                            additional_info = object_class_summary(detected_labels)
                             event_detail = f"{device_label} ({image_source}): {additional_info}."
                             log.debug(
                                 "Object detection event detail",
-                                extra={"event_detail": event_detail},
+                                extra={"event_detail": event_detail, "class_counts": detected_labels},
                             )
                             input_device["event_detail"] = additional_info
                     except self._rekog.exceptions.InvalidImageFormatException:
