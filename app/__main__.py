@@ -204,6 +204,17 @@ SENTRY_MAX_VALUE_LENGTH = 1024
 # only find what was already found.
 DETECTION_ARTEFACT_PREFIX = "detect_"
 
+# A detection result may arrive with a JSON sidecar that has its stem, e.g.
+# detect_dog_pool_1762697402.json next to detect_dog_pool_1762697402.jpg. The name
+# says the class but not the detector's own label, the count or the confidence, and
+# a consumer that parses a name is coupled to the position of a token in it - so the
+# producer states the classes and this application relays them. The file name stays
+# the fallback, for uploads written before sidecars existed.
+DETECTION_METADATA_SUFFIXES = (".json",)
+
+# a sidecar is a few hundred bytes; anything larger is not one
+DETECTION_METADATA_MAX_BYTES = 64 * 1024
+
 # Model label (matched case-insensitively and exactly) -> object class token used
 # in artefact and marker names. This is the *only* place a new class is added:
 # "dog" here yields detect_dog_<name>, a dog_<name> marker and "1 dog(s)" in the
@@ -213,6 +224,12 @@ DETECTED_OBJECT_CLASSES = {"person": "human", "face": "human"}
 
 # only a human detection justifies archiving a camera's recording
 HUMAN_OBJECT_CLASS = "human"
+
+# Every spelling that means "a person is in this image": the archive's class token
+# and the detectors' own labels. A detection artefact quotes the label its producer
+# recorded ("person"), while our own model reports the class token ("human"), and
+# downstream must not have to care which process ran the detector.
+HUMAN_LABELS = frozenset({HUMAN_OBJECT_CLASS, "person", "face"})
 
 # markers are named after the object class they record: human_*, dog_*, ...
 OBJECT_CLASS_MARKER_PREFIXES = tuple(
@@ -304,6 +321,115 @@ def detection_object_class(label_name: str) -> str | None:
     label such as "Surface" can never be mistaken for "face" by a substring match.
     """
     return DETECTED_OBJECT_CLASSES.get(label_name.strip().lower())
+
+
+def is_detection_metadata(snapshot_path: str) -> bool:
+    """True for a JSON sidecar, which is metadata rather than a snapshot.
+
+    A producer may write `detect_<class>_<source>.json` beside its still to state the
+    classes it recorded. A sidecar describes an image; treating it as one would hand
+    event-processor a JSON document where it expects a JPEG (and the detector would
+    publish exactly that, because the file name carries the ``detect_`` prefix). It
+    has no device event of its own and nothing to analyse.
+    """
+    return snapshot_path.lower().endswith(DETECTION_METADATA_SUFFIXES)
+
+
+def detection_metadata_path(snapshot_path: str) -> str:
+    """The sidecar path belonging to a snapshot: same directory, same stem, ``.json``.
+
+    ``os.path.splitext`` is used on the *name*, not the whole path, so a directory
+    that contains a dot cannot be mistaken for a suffix.
+    """
+    directory, name = os.path.split(snapshot_path)
+    stem = os.path.splitext(name)[0]
+    return os.path.join(directory, f"{stem}.json")
+
+
+def read_detection_metadata(snapshot_path: str) -> dict[str, Any] | None:
+    """The sidecar's JSON object for a detection artefact, or None when there is none.
+
+    Never raises. A missing, oversized, unreadable or non-object sidecar is a
+    downgrade to the file name (``detection_artefact_classes``), never a reason to
+    lose the detection: the image is the record, the metadata only enriches it.
+    """
+    metadata_path = detection_metadata_path(snapshot_path)
+    try:
+        file_size = os.path.getsize(metadata_path)
+        if file_size > DETECTION_METADATA_MAX_BYTES:
+            log.warning(
+                "Ignoring oversized detection metadata",
+                extra={"metadata_path": metadata_path, "file_size_bytes": file_size},
+            )
+            return None
+        with open(metadata_path, encoding="utf-8") as metadata_file:
+            document = json.load(metadata_file)
+    except FileNotFoundError:
+        return None
+    except (OSError, JSONDecodeError, UnicodeDecodeError) as e:
+        log.warning(
+            "Ignoring unreadable detection metadata",
+            extra={"metadata_path": metadata_path, "error": str(e)},
+        )
+        return None
+    if not isinstance(document, dict):
+        log.warning(
+            "Ignoring detection metadata that is not an object",
+            extra={"metadata_path": metadata_path, "document_type": type(document).__name__},
+        )
+        return None
+    return document
+
+
+def detection_artefact_name_class(snapshot_path: str) -> str | None:
+    """The class token a detection artefact's *name* declares, or None.
+
+    ``detect_<class>_<source>`` is the naming contract, so the token after
+    ``detect_`` is a usable fallback when the producer wrote no sidecar (an upload
+    from before sidecars existed, or another producer following the convention).
+    The extension is removed first: a name that carries no separator after the
+    prefix (``detect_1762697402.jpg``) would otherwise yield ``1762697402.jpg`` as
+    its "class". A token that is empty or a bare number is not a class either.
+    """
+    name = os.path.splitext(os.path.basename(snapshot_path))[0]
+    token = name[len(DETECTION_ARTEFACT_PREFIX) :].split("_", 1)[0].strip().lower()
+    if not token or token.isdigit():
+        return None
+    return token
+
+
+def detection_artefact_classes(snapshot_path: str) -> tuple[dict[str, int], str | None]:
+    """Class counts for a detection artefact, and where they came from.
+
+    Returns ``({label: count}, source)`` with ``source`` one of ``"metadata"``,
+    ``"filename"`` or ``None``. The sidecar wins because it carries the producer's
+    own label (``person``) rather than the archive's spelling (``human``), the count
+    the detector actually decided, and every class in the image; the file name is
+    the fallback so a pre-sidecar upload still relays something. ``detection_count``
+    belongs to the first label, exactly as the record that produced the sidecar
+    defines it.
+    """
+    metadata = read_detection_metadata(snapshot_path)
+    if metadata:
+        labels = metadata.get("detected_classes")
+        if not isinstance(labels, list):
+            single_label = metadata.get("detected_class")
+            labels = [single_label] if isinstance(single_label, str) else []
+        count = metadata.get("detection_count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            count = 1
+        class_counts: dict[str, int] = {}
+        for index, label in enumerate(labels):
+            if not isinstance(label, str) or not label.strip():
+                continue
+            normalized = label.strip().lower()
+            class_counts[normalized] = class_counts.get(normalized, 0) + (count if index == 0 else 1)
+        if class_counts:
+            return class_counts, "metadata"
+    name_class = detection_artefact_name_class(snapshot_path)
+    if name_class is not None:
+        return {name_class: 1}, "filename"
+    return {}, None
 
 
 def object_class_summary(class_counts: dict[str, int]) -> str:
@@ -1653,6 +1779,15 @@ class UploadEventHandler(FileSystemEventHandler, Closable):
                 "Not generating redundant snapshot event",
                 extra={"snapshot_path": snapshot_path},
             )
+        # a sidecar describes a still; it is not one. It must never be published as a
+        # device event (event-processor would receive a JSON document where the output
+        # path expects an image) and there is nothing in it to analyse; the block below
+        # still queues it for the archive, so the record keeps its own classes.
+        elif is_detection_metadata(snapshot_path):
+            log.debug(
+                "Not publishing detection metadata as a device event",
+                extra={"snapshot_path": snapshot_path},
+            )
         # a detection result is never analysed again whoever produced it, but a
         # file that did not come from us is still an event for its device: it is
         # handed on so the detector relays it without running the model
@@ -1971,6 +2106,37 @@ class ObjectDetector(ZmqRelay):
             span.set_attribute("snapshot_path", snapshot_path)
             # find objects using the specified model
             event_detail = None
+            if is_detection_artefact(snapshot_path):
+                # A detection result states its own verdict, so it is relayed whether or
+                # not this process can run a model: the classes belong to the producer,
+                # not to us. Without this the device event carries an image and no
+                # detail, and event-processor's image filter - which only forwards a
+                # caption that names a person (person/human/face) - drops the whole
+                # message instead of forwarding the still to the chat.
+                artefact_class_counts, class_source = detection_artefact_classes(snapshot_path)
+                detail_context = snapshot_log_context(
+                    snapshot_path=snapshot_path,
+                    device_label=device_label,
+                    image_source=image_source,
+                    image_size_bytes=len(image_bytes),
+                )
+                if artefact_class_counts:
+                    additional_info = object_class_summary(artefact_class_counts)
+                    event_detail = f"{device_label} ({image_source}): {additional_info}."
+                    input_device["event_detail"] = additional_info
+                    detail_context.update(
+                        {
+                            "event_detail": event_detail,
+                            "class_counts": artefact_class_counts,
+                            "class_source": class_source,
+                        }
+                    )
+                    if HUMAN_LABELS.intersection(artefact_class_counts):
+                        log.info("Human detected", extra=detail_context)
+                    else:
+                        log.debug("Detection artefact classes relayed", extra=detail_context)
+                else:
+                    log.debug("Detection artefact carries no class metadata", extra=detail_context)
             if is_flag_enabled(FEATURE_FLAG_OBJECT_DETECTION) and self._od_enabled:
                 if is_detection_artefact(snapshot_path):
                     # running the model over detection output can only find what

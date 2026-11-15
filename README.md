@@ -343,6 +343,13 @@ The `UploadEventHandler` in `app/__main__.py` watches the snapshot tree:
   completion notification is the primary trigger; this is the fallback) and
   queues everything else - detection artefacts, `<class>_` markers and `.mkv`
   recordings - for cloud archiving
+- Never runs the model over a detection result (`detect_*`), whichever process
+  produced it: it relays the producer's classes instead. A sidecar with the same
+  stem (`detect_dog_pool_<epoch>.json`) supplies them, and the file name
+  (`detect_<class>_…`) is the fallback, so a still that already passed detection
+  still reaches event-processor with a class in its message detail rather than as
+  an unattributed camera frame. The sidecar itself is metadata: it is archived
+  with its still and never published as a device event.
 
 ## Build System
 

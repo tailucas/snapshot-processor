@@ -184,6 +184,19 @@ section so the app runs with zero external dependencies:
   for cloud storage/archiving, and — when it did not come from us — handed to the
   detector so the device event is still published for event-processor (the
   detector relays without inferring). Our own artefacts produce no second event.
+  **The relay carries the classes.** A detection result may arrive with a JSON
+  sidecar of the same stem (`detect_dog_pool_<epoch>.json`); the detector reads it
+  (`detection_artefact_classes()`), sets `event_detail` to the same
+  `N <label>(s)` summary its own model produces, and does so whether or not the
+  object-detection feature flags are on — the classes belong to the producer, not
+  to this process. `class_source` in the record says `metadata` or `filename`; the
+  file name is the fallback for an upload written before sidecars existed, so a
+  class token is never required to be parsed out of a name when the producer
+  stated it. A sidecar is **never** a snapshot: it produces no device event
+  (`is_detection_metadata()`), because event-processor would receive a JSON
+  document on a path that expects an image; it is still archived beside its still.
+  Only a sidecar that is missing, oversized (64 KiB cap), unreadable or not a JSON
+  object is ignored, with one WARNING, and never at the cost of the detection.
 - Recording gate: a recording (any `video/*` upload, i.e. the `.mkv` clips) is
   archived **only** when the same device detected the human class within
   `RECORDING_DETECTION_WINDOW_SECONDS` (default `60`) of the recording's
