@@ -215,6 +215,16 @@ DETECTION_METADATA_SUFFIXES = (".json",)
 # a sidecar is a few hundred bytes; anything larger is not one
 DETECTION_METADATA_MAX_BYTES = 64 * 1024
 
+# A detection sidecar may also name the trace that produced it: camera-checker
+# writes the trace_id/span_id of the span that decided the detection (its
+# zone.event span, camera-checker/.clinerules/ftp.md §2), because a file drop is
+# the one hand-off with no message to carry an OpenTelemetry context. Parenting
+# this process's work on that span is what makes one detection one trace, from
+# the rule engine's decision through the archive, the device event published
+# below and every consumer downstream of it.
+DETECTION_TRACE_ID_FIELD = "trace_id"
+DETECTION_SPAN_ID_FIELD = "span_id"
+
 # Model label (matched case-insensitively and exactly) -> object class token used
 # in artefact and marker names. This is the *only* place a new class is added:
 # "dog" here yields detect_dog_<name>, a dog_<name> marker and "1 dog(s)" in the
@@ -379,6 +389,70 @@ def read_detection_metadata(snapshot_path: str) -> dict[str, Any] | None:
         )
         return None
     return document
+
+
+def detection_metadata_trace_context(snapshot_path: str) -> Context | None:
+    """The producer's trace, as a remote parent for this file's processing.
+
+    A producer may state the trace that decided a detection in the still's sidecar
+    as ``trace_id``/``span_id`` (camera-checker writes the ids of its ``zone.event``
+    span). A file drop is the one hand-off with no message to read an OpenTelemetry
+    context from, so the sidecar is the only place that correlation can come from:
+    continuing it here makes one detection one trace, from the rule engine's decision
+    through this process's analysis, the device event it publishes and everything
+    downstream of that.
+
+    Only a **detection artefact** is considered — the reserved ``detect_`` namespace
+    is what makes a sidecar authoritative, so a stray JSON beside a camera upload can
+    never choose a trace. The pair becomes a W3C ``traceparent`` and is run through
+    the configured propagator, which validates it (all-zero or malformed ids are
+    rejected); the extracted trace id must then equal the one the sidecar named, so an
+    ignored carrier can never be mistaken for a parent. Anything unusable is reported
+    and dropped: an unrelated trace is worse than a root span.
+    """
+    if not is_detection_artefact(snapshot_path):
+        return None
+    metadata = read_detection_metadata(snapshot_path)
+    if not metadata:
+        return None
+    trace_id = metadata.get(DETECTION_TRACE_ID_FIELD)
+    span_id = metadata.get(DETECTION_SPAN_ID_FIELD)
+    if trace_id is None and span_id is None:
+        # no trace was recorded (telemetry off), or the sidecar predates the field:
+        # expected, and not worth a record of its own
+        return None
+    if not isinstance(trace_id, str) or not isinstance(span_id, str):
+        log.warning(
+            "Ignoring unusable detection trace metadata",
+            extra={"snapshot_path": snapshot_path, "reason": "trace_id and span_id must both be strings"},
+        )
+        return None
+    context = propagate.extract({TRACEPARENT_KEY: f"00-{trace_id}-{span_id}-01"})
+    span_context = trace.get_current_span(context).get_span_context()
+    if not span_context.is_valid or f"{span_context.trace_id:032x}" != trace_id.lower():
+        log.warning(
+            "Ignoring unusable detection trace metadata",
+            extra={"snapshot_path": snapshot_path, "reason": "not a valid W3C traceparent"},
+        )
+        return None
+    return context
+
+
+def file_trace_context(carrier: dict[str, str] | None, snapshot_path: str) -> tuple[Context, str]:
+    """The parent context for processing one snapshot, and where it came from.
+
+    A carrier wins: it is the live path, and an uploaded detection artefact arrives
+    without one. The sidecar is the durable fallback, so a file reprocessed after a
+    restart still joins the trace that produced it. The source is returned so the span
+    can state it — "the trace continued" is otherwise invisible to an operator.
+    """
+    context = extract_context(carrier)
+    if trace.get_current_span(context).get_span_context().is_valid:
+        return context, "carrier"
+    metadata_context = detection_metadata_trace_context(snapshot_path)
+    if metadata_context is not None:
+        return metadata_context, "detection_metadata"
+    return context, "root"
 
 
 def detection_artefact_name_class(snapshot_path: str) -> str | None:
@@ -2099,11 +2173,20 @@ class ObjectDetector(ZmqRelay):
             # image_source above still marks this as an upload
             input_device["image"] = image_bytes
         self._path_cache[snapshot_path] = device_label
-        context = extract_context(carrier)
+        # an uploaded detection artefact arrives without a carrier, so its sidecar may name
+        # the trace that decided it; that parent is what keeps one detection one trace across
+        # the two processes (see file_trace_context, observability.md §6)
+        context, trace_source = file_trace_context(carrier, snapshot_path)
         with tracer.start_as_current_span("ObjectDetector.process_message", context=context) as span:
             span.set_attribute("device_label", device_label)
             span.set_attribute("image_source", image_source)
             span.set_attribute("snapshot_path", snapshot_path)
+            span.set_attribute("trace_source", trace_source)
+            if trace_source == "detection_metadata":
+                log.debug(
+                    "Continuing producer trace from detection metadata",
+                    extra={"snapshot_path": snapshot_path, "device_label": device_label},
+                )
             # find objects using the specified model
             event_detail = None
             if is_detection_artefact(snapshot_path):

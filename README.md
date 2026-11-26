@@ -350,6 +350,12 @@ The `UploadEventHandler` in `app/__main__.py` watches the snapshot tree:
   still reaches event-processor with a class in its message detail rather than as
   an unattributed camera frame. The sidecar itself is metadata: it is archived
   with its still and never published as a device event.
+- Continues the producer's trace for an uploaded detection: the sidecar may name
+  `trace_id`/`span_id` of the span that decided it (camera-checker writes them), and
+  this process parents `ObjectDetector.process_message` on that remote span, so one
+  detection is one trace from the rule engine, through this process and the device
+  event it publishes, to the chat message. A live carrier still wins; an unusable
+  pair is reported and ignored rather than turning into a broken parent.
 
 ## Build System
 

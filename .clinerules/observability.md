@@ -160,3 +160,52 @@ missing from Sentry, which is what happened here.
 - **Rule:** never log a raw camera artefact. Report the failure with scalars
   (`image_size_bytes`, `file_path`, the exception text) and let the log-derived
   event stay small enough to ingest.
+
+## 6. Trace continuity across a file drop (detection sidecars)
+
+An FTP upload is the one hand-off with **no message to carry an OpenTelemetry
+context**: the producer writes a file, this process is woken by a file system
+event minutes later, and `extract_context(None)` yields an empty context — so
+without help every uploaded detection starts its own trace, and "the dog in the
+pool" is two unrelated traces in two services.
+
+`camera-checker` solves that by naming its trace in the still's JSON sidecar
+(`camera-checker/.clinerules/ftp.md` §2):
+
+```json
+{"schema":"camera-checker/detection/v1","detected_class":"dog",
+ "trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"00f067aa0ba902b7", "…":"…"}
+```
+
+`trace_id`/`span_id` are the ids of the producer's `zone.event` span — the
+decision that produced the file. The pair is **present-only**: with telemetry off
+the producer writes no trace at all, and a made-up id would be worse than none.
+
+Rules for consuming it:
+
+- **`file_trace_context(carrier, snapshot_path)` is the only place a parent is
+  chosen.** A carrier wins (it is the live path); the sidecar is the durable
+  fallback, so a file reprocessed after a restart still joins its producer's
+  trace. The function returns the source so the span can state it —
+  `trace_source` is `carrier`, `detection_metadata` or `root`.
+- **Only a detection artefact may choose a trace.** The reserved `detect_`
+  namespace is what makes a sidecar authoritative; a stray JSON beside a camera
+  upload must never be able to pick a parent.
+- **Validate through the propagator, then prove it.** The pair becomes a W3C
+  `traceparent` and goes through `propagate.extract`, so all-zero or malformed
+  ids are rejected by the standard parser; the extracted trace id must then equal
+  the one the sidecar named, or an ignored carrier would silently hand back the
+  ambient context. An unusable pair is reported (`Ignoring unusable detection
+  trace metadata`) and dropped — a root span is a better outcome than a wrong
+  parent.
+- **The parent is remote** (`is_remote=True`) and sampled, so this process's
+  spans, the device event it publishes (`inject_context()` in the payload) and
+  everything downstream of that stay in the producer's trace.
+- **The span says where the trace came from** (`trace_source`), and a continued
+  trace logs one DEBUG record (`Continuing producer trace from detection
+  metadata`) — otherwise "did it pick this up?" is unanswerable from the log.
+
+The corresponding producer-side contract lives in `camera-checker`:
+`.clinerules/ftp.md` §2 (what the sidecar carries) and
+`.clinerules/observability.md` §6c (why the context travels in the queue entry,
+never on `Alert`).
