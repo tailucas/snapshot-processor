@@ -68,7 +68,7 @@ requires-dist = [
     { name = "cachetools", specifier = ">=6.2.0" },
     { name = "pydrive2", specifier = ">=1.21.3" },
     { name = "pyftpdlib", specifier = ">=2.0.1" },
-    { name = "tailucas-pylib", extras = ["aws", "creds", "monitoring", "mq"], specifier = ">=0.7.8" },
+    { name = "tailucas-pylib", extras = ["aws", "creds", "monitoring", "mq"], specifier = ">=0.9.0" },
     { name = "watchdog", specifier = ">=6.0.0" },
 ]
 
@@ -1922,7 +1922,7 @@ wheels = [
 
 [[package]]
 name = "tailucas-pylib"
-version = "0.8.5"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "python-dateutil" },
@@ -1931,9 +1931,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sentry-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8a/6e/5539165543abc84ae4a0c80eed94447153fd111e226bdc60764843d9a024/tailucas_pylib-0.8.5.tar.gz", hash = "sha256:3d2f8379cb728158cbc79364cb1d1762811f3f3bbce14763cfcd7ed791acdbda", size = 25930, upload-time = "2026-11-01T06:40:15.885Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/62/7ac1a198a934cd7b125ca0bf2283948ec6d26a8a81827d739ff65e7ad391/tailucas_pylib-0.9.0.tar.gz", hash = "sha256:141e682a958f7499fe95009c4570cae623cfe35f58f4c7d3c5d9d91fdb8cb666", size = 29622, upload-time = "2026-11-26T12:20:42.702Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/83/3c34cba8fd7f4165450a1abeb93261e27e919b83b0434f0de8371ad221cc/tailucas_pylib-0.8.5-py3-none-any.whl", hash = "sha256:006d9f2cb04562ef628248d299988b2fe67cc545bc5fc0b22d0bf4be9cd01d3e", size = 30278, upload-time = "2026-11-01T06:40:14.245Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/5b/d754c7983011f782377fe901ebc6673ceac3ae937b2a192487079cc5b6c2/tailucas_pylib-0.9.0-py3-none-any.whl", hash = "sha256:49929cca2bd26b16c7a1999e148b7bf27ab1a681e5c86b8e2f2543fcb82eb482", size = 34146, upload-time = "2026-11-26T12:20:43.836Z" },
 ]
 
 [package.optional-dependencies]
@@ -1967,13 +1967,13 @@ resolution-markers = [
     "python_full_version < '3.15' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "jinja2" },
-    { name = "networkx" },
-    { name = "setuptools" },
-    { name = "sympy" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "sys_platform == 'darwin'" },
+    { name = "fsspec", marker = "sys_platform == 'darwin'" },
+    { name = "jinja2", marker = "sys_platform == 'darwin'" },
+    { name = "networkx", marker = "sys_platform == 'darwin'" },
+    { name = "setuptools", marker = "sys_platform == 'darwin'" },
+    { name = "sympy", marker = "sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.15.0-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:0d2b2d9674fa0b9b3f50e83231aa6545a0b19e437a52f0af939a224faaa45515", upload-time = "2026-10-28T13:17:13Z" },
@@ -1993,13 +1993,13 @@ resolution-markers = [
     "python_full_version < '3.15' and sys_platform != 'darwin' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "jinja2" },
-    { name = "networkx" },
-    { name = "setuptools" },
-    { name = "sympy" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "sys_platform != 'darwin'" },
+    { name = "fsspec", marker = "sys_platform != 'darwin'" },
+    { name = "jinja2", marker = "sys_platform != 'darwin'" },
+    { name = "networkx", marker = "sys_platform != 'darwin'" },
+    { name = "setuptools", marker = "sys_platform != 'darwin'" },
+    { name = "sympy", marker = "sys_platform != 'darwin'" },
+    { name = "typing-extensions", marker = "sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp314-cp314-linux_s390x.whl", hash = "sha256:ef810702df4dd70fe1b8ebee9e7394c6491f779841571a71433829e44927eaa5", upload-time = "2026-10-28T13:19:19Z" },
@@ -2027,9 +2027,9 @@ resolution-markers = [
     "python_full_version < '3.15' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "torch", version = "2.15.0", source = { registry = "https://download.pytorch.org/whl/cpu" } },
+    { name = "numpy", marker = "sys_platform == 'darwin'" },
+    { name = "pillow", marker = "sys_platform == 'darwin'" },
+    { name = "torch", version = "2.15.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.29.2-py3-none-macosx_14_0_arm64.whl", hash = "sha256:d412494ff011f24c884a3cffd33eba1cb45a0299d4e26c1e175113f9d3b3ebc7", upload-time = "2026-10-28T14:18:50Z" },
@@ -2046,9 +2046,9 @@ resolution-markers = [
     "python_full_version < '3.15' and sys_platform != 'darwin' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" } },
+    { name = "numpy", marker = "sys_platform != 'darwin'" },
+    { name = "pillow", marker = "sys_platform != 'darwin'" },
+    { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torchvision-0.29.2%2Bcpu-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:0be2f85933012cb487f844c7483665191653ee8684da89d6d0e34fd63c3a0a88", upload-time = "2026-10-28T14:18:50Z" },

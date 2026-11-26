@@ -32,7 +32,7 @@ from botocore.exceptions import EndpointConnectionError
 from cachetools import LRUCache
 from googleapiclient.errors import HttpError
 from httplib2.error import HttpLib2Error
-from opentelemetry import metrics, propagate, trace
+from opentelemetry import metrics, trace
 from opentelemetry.context import Context
 from pika.exceptions import (
     AMQPConnectionError,
@@ -62,7 +62,6 @@ from app import FTP_NOTIFY_URL
 from tailucas_pylib import APP_NAME, DEVICE_NAME, app_config, log, threads
 from tailucas_pylib.app import AppThread, ZmqRelay
 from tailucas_pylib.aws.metrics import post_count_metric
-from tailucas_pylib.data import make_payload
 from tailucas_pylib.datetime import (
     make_iso_timestamp,
     make_timestamp,
@@ -70,9 +69,9 @@ from tailucas_pylib.datetime import (
 from tailucas_pylib.flags import is_flag_enabled
 from tailucas_pylib.handler import exception_handler
 from tailucas_pylib.process import SignalHandler
-from tailucas_pylib.rabbit import RabbitMQRelay, ZMQListener
+from tailucas_pylib.rabbit import TracingRabbitMQRelay, TracingZMQListener
 from tailucas_pylib.threads import bye, die, thread_nanny
-from tailucas_pylib.tracing import record_exception
+from tailucas_pylib.tracing import extract_context, inject_context, record_exception
 from tailucas_pylib.zmq import URL_WORKER_APP, Closable, try_close, zmq_socket, zmq_term
 
 URL_WORKER_RABBIT_PUBLISHER = "inproc://rabbitmq-publisher"
@@ -80,7 +79,6 @@ URL_WORKER_OBJECT_DETECTOR = "inproc://object-detector"
 URL_WORKER_CLOUD_STORAGE = "inproc://cloud-storage"
 
 TRACEPARENT_KEY = "traceparent"
-BAGGAGE_KEY = "baggage"
 
 meter = metrics.get_meter(APP_NAME)
 tracer = trace.get_tracer(APP_NAME)
@@ -154,20 +152,6 @@ def detection_metric_attributes(device_label: str, image_source: str, engine: st
         "image_source": image_source,
         "engine": engine,
     }
-
-
-def inject_context(context: Context | None = None) -> dict[str, str]:
-    """Inject the current (or given) trace context into a carrier dict."""
-    carrier: dict[str, str] = {}
-    propagate.inject(carrier, context=context)
-    return carrier
-
-
-def extract_context(carrier: dict[str, str] | None) -> Context:
-    """Extract a trace context from a carrier dict, or return the current context."""
-    if carrier is None:
-        return propagate.extract({})
-    return propagate.extract(carrier)
 
 
 FEATURE_FLAG_OBJECT_DETECTION = "object-detection"
@@ -427,7 +411,11 @@ def detection_metadata_trace_context(snapshot_path: str) -> Context | None:
             extra={"snapshot_path": snapshot_path, "reason": "trace_id and span_id must both be strings"},
         )
         return None
-    context = propagate.extract({TRACEPARENT_KEY: f"00-{trace_id}-{span_id}-01"})
+    # the helper is untyped from here (pylib ships no py.typed); name the type so
+    # mypy does not treat the value returned below as Any
+    context: Context | None = extract_context({TRACEPARENT_KEY: f"00-{trace_id}-{span_id}-01"})
+    if context is None:
+        return None
     span_context = trace.get_current_span(context).get_span_context()
     if not span_context.is_valid or f"{span_context.trace_id:032x}" != trace_id.lower():
         log.warning(
@@ -438,7 +426,7 @@ def detection_metadata_trace_context(snapshot_path: str) -> Context | None:
     return context
 
 
-def file_trace_context(carrier: dict[str, str] | None, snapshot_path: str) -> tuple[Context, str]:
+def file_trace_context(carrier: dict[str, str] | None, snapshot_path: str) -> tuple[Context | None, str]:
     """The parent context for processing one snapshot, and where it came from.
 
     A carrier wins: it is the live path, and an uploaded detection artefact arrives
@@ -2508,68 +2496,6 @@ class ObjectDetector(ZmqRelay):
                 extra={"device_label": device_label, "publisher_topic": publisher_topic},
             )
             sink_socket.send_pyobj((publisher_topic, publisher_data, inject_context()))
-
-
-class TracingZMQListener(ZMQListener):
-    """ZMQListener that extracts traceparent/baggage from the msgpack body and
-    forwards the trace context over ZMQ so downstream spans can continue it."""
-
-    def callback(self, ch, method, properties, body):
-        topic = method.routing_key
-        log.debug("Message received", extra={"topic": topic, "message_bytes": len(body)})
-        topic_parts = topic.split(".")
-        if len(topic_parts) < 3:
-            log.debug(
-                "Ignoring non-routable message due to unsufficient topic parts",
-                extra={"topic": topic},
-            )
-            return
-        if topic_parts[1] not in ["heartbeat", "leader"]:
-            log.debug("Device event on topic", extra={"topic": topic})
-        device_event = None
-        try:
-            device_event = msgpack.unpackb(body)
-        except Exception:
-            log.exception("Bad message", extra={"body": body})
-            return
-        if not isinstance(device_event, dict):
-            log.debug("Ignoring non-dict message body", extra={"topic": topic})
-            return
-        carrier = {}
-        for key in (TRACEPARENT_KEY, BAGGAGE_KEY):
-            if key in device_event:
-                carrier[key] = device_event.pop(key)
-        try:
-            self.processor.send_pyobj(({topic_parts[2]: device_event}, carrier))
-        except Exception as e:
-            log.debug(self.__class__.__name__, exc_info=True)
-            if not threads.shutting_down:
-                raise e
-
-
-class TracingRabbitMQRelay(RabbitMQRelay):
-    """RabbitMQRelay that injects the current trace context into the msgpack
-    body so outbound RabbitMQ messages carry traceparent/baggage."""
-
-    def process_message(self, zmq_socket):
-        received = zmq_socket.recv_pyobj()
-        if isinstance(received, tuple) and len(received) == 3:
-            event_topic, event_payload, carrier = received
-        else:
-            event_topic, event_payload = received
-            carrier = None
-        context = extract_context(carrier)
-        if isinstance(event_payload, dict):
-            event_payload = dict(event_payload)
-            event_payload.update(inject_context(context=context))
-        try:
-            self._mq_channel.basic_publish(
-                exchange=self._mq_config_exchange,
-                routing_key=event_topic,
-                body=make_payload(data=event_payload),  # type: ignore
-            )
-        except (ConnectionClosedByBroker, StreamLostError) as e:
-            raise ResourceWarning() from e
 
 
 def _sentry_event_size_bytes(event: Event) -> int:
