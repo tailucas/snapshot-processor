@@ -22,8 +22,10 @@ conventions a fork must preserve when extending the application.
   same line. Add a `##` comment to every new target.
 - **Incremental builds via real file targets.** Generated artifacts are file
   targets that rebuild only when missing or when their inputs change:
-  - `.env` depends on `base.env` and `docker-compose.yml`, and is
-    sanity-checked with a minimum line count.
+  - `.env` depends on `base.env` only, and is produced by `dot_env` (from
+    `tailucas-pylib`, via `uvx`): it merges the 1Password item over those
+    defaults, refuses duplicate keys, and writes atomically at `0600`. A
+    failure leaves the previous file untouched.
   - `.venv` depends on `pyproject.toml` and `uv.lock`.
   - `data/` depends on nothing — it is created (and chowned to
     `USER_ID:GROUP_ID`) only if missing.
@@ -89,6 +91,7 @@ or in `app_setup.sh`.
 
 Toolchain setup scripts belong to the **base image**, not this project; the
 fork must not expect to maintain them here. The fork ships
-`dot_env_setup.sh` (`.env` generation from 1Password) and `app_entrypoint.sh`
-(runtime override that appends the FTP supervised program and drives Google
-OAuth setup). The inherited `python_setup.sh` is invoked from the Dockerfile.
+`app_entrypoint.sh` (runtime override that appends the FTP supervised program
+and drives Google OAuth setup) and nothing else: `.env` generation is `dot_env`
+from `tailucas-pylib`, run by `make configure` on the host, so it is not part of
+the image. The inherited `python_setup.sh` is invoked from the Dockerfile.
