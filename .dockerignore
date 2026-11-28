@@ -1,0 +1,17 @@
+# This project's data/ was 1.1 GB on 2026-11-27 (camera uploads plus the Google
+# OAuth token). It must never be uploaded to a CI runner -- both for time and
+# because data/snapshot_processor_creds is a credential.
+.git
+.github
+.clinerules
+.devcontainer
+.venv
+data
+__pycache__
+*.py[cod]
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.vscode
+# never ship local credentials into a build context
+.env
